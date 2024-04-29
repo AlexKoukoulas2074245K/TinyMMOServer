@@ -25,7 +25,6 @@
 #include <random>
 #include <vector>
 
-
 ///-----------------------------------------------------------------------------------------------
 
 using uint = unsigned int;
@@ -102,7 +101,7 @@ inline T Abs(const T val)
 /// @returns the sin of the value.
 inline float Sinf(const float val)
 {
-    return std::sinf(val);
+    return sinf(val);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -111,7 +110,7 @@ inline float Sinf(const float val)
 /// @returns the cosine of the value.
 inline float Cosf(const float val)
 {
-    return std::cosf(val);
+    return cosf(val);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -157,7 +156,7 @@ inline T Slerp(const T x, const T y, const float theta, const float t)
 /// @returns the square root of the value.
 inline float Sqrt(const float val)
 {
-    return std::sqrtf(val);
+    return sqrtf(val);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -256,7 +255,7 @@ inline float LinearFunction(const float t)
 /// @returns the transformed t value quadratically.
 inline float QuadFunction(const float t)
 {
-    return std::powf(t, 2.0f);
+    return powf(t, 2.0f);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -265,7 +264,7 @@ inline float QuadFunction(const float t)
 /// @returns the transformed t value cubically.
 inline float CubicFunction(const float t)
 {
-    return std::powf(t, 3.0f);
+    return powf(t, 3.0f);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -274,7 +273,7 @@ inline float CubicFunction(const float t)
 /// @returns the transformed t value quartically.
 inline float QuartFunction(const float t)
 {
-    return std::powf(t, 4.0f);
+    return powf(t, 4.0f);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -283,7 +282,7 @@ inline float QuartFunction(const float t)
 /// @returns the transformed t value quintically.
 inline float QuintFunction(const float t)
 {
-    return std::powf(t, 5.0f);
+    return powf(t, 5.0f);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -292,7 +291,7 @@ inline float QuintFunction(const float t)
 /// @returns the transformed t value based on the back function.
 inline float BackFunction(const float t)
 {
-    return std::powf(t, 2.0f) * (2.70158f * t - 1.70158f);
+    return powf(t, 2.0f) * (2.70158f * t - 1.70158f);
 }
 
 ///-----------------------------------------------------------------------------------------------
@@ -329,7 +328,7 @@ inline float ElasticFunction(const float t)
 
     if (t <= 0.0f) return 0.0f;
     else if (t >= 1.0f) return 1.0f;
-    else return std::powf(2.0f, -10.0f * t) * std::sinf((t * 10.0f -0.75f) * c4) + 1.0f;
+    else return powf(2.0f, -10.0f * t) * sinf((t * 10.0f -0.75f) * c4) + 1.0f;
 }
 
 ///-----------------------------------------------------------------------------------------------

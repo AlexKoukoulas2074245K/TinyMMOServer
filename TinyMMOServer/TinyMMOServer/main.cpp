@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <mutex>
 #include <thread>
 #include <unistd.h>
 #include <vector>
