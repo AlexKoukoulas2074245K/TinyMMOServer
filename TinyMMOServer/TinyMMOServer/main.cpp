@@ -147,7 +147,7 @@ void HandleClient(int clientSocket)
                 playerDataJsonArray.push_back(serverPlayerDataCopy.mPlayerData.SerializeToJson());
             }
             
-            worldStateJson["playerData"] = playerDataJsonArray;
+            worldStateJson[networking::PlayerData::ObjectCollectionHeader()] = playerDataJsonArray;
             
             std::string worldStateString = worldStateJson.dump();
             if (send(clientSocket, worldStateString.c_str(), worldStateString.size(), 0) == -1)
