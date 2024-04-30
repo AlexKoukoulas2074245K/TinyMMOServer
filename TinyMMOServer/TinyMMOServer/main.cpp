@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "net_common/NetworkMessages.h"
 #include "net_common/SerializableNetworkObjects.h"
 #include "util/Date.h"
 #include "util/Json.h"
@@ -95,6 +96,36 @@ void UpdateWorldPlayerEntries(ServerPlayerData&& playerData)
 
 ///------------------------------------------------------------------------------------------------
 
+void OnClientPlayerStateMessage(const nlohmann::json& json, const int clientSocket)
+{
+    networking::PlayerData incomingPlayerData;
+    incomingPlayerData.DeserializeFromJson(json);
+    
+    UpdateWorldPlayerEntries(ServerPlayerData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
+    
+    nlohmann::json worldStateJson;
+    nlohmann::json playerDataJsonArray;
+    for (const auto& serverPlayerDataEntry: sWorldData)
+    {
+        auto serverPlayerDataCopy = serverPlayerDataEntry;
+        serverPlayerDataCopy.mPlayerData.isLocal = serverPlayerDataCopy.mPlayerData.playerName == incomingPlayerData.playerName;
+        playerDataJsonArray.push_back(serverPlayerDataCopy.mPlayerData.SerializeToJson());
+    }
+    
+    worldStateJson[networking::PlayerData::ObjectCollectionHeader()] = playerDataJsonArray;
+    networking::PopulateMessageHeader(worldStateJson, networking::MessageType::SC_PLAYER_STATE_RESPONSE);
+    
+    std::string worldStateString = worldStateJson.dump();
+    if (send(clientSocket, worldStateString.c_str(), worldStateString.size(), 0) == -1)
+    {
+        logging::Log(logging::LogType::ERROR, "Error sending message to client");
+        close(clientSocket);
+        return;
+    }
+}
+
+///------------------------------------------------------------------------------------------------
+
 void HandleClient(int clientSocket)
 {
     std::string jsonMessage;
@@ -133,28 +164,9 @@ void HandleClient(int clientSocket)
         {
             nlohmann::json receivedJson = nlohmann::json::parse(jsonMessage);
             
-            networking::PlayerData incomingPlayerData;
-            incomingPlayerData.DeserializeFromJson(receivedJson);
-            
-            UpdateWorldPlayerEntries(ServerPlayerData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
-            
-            nlohmann::json worldStateJson;
-            nlohmann::json playerDataJsonArray;
-            for (const auto& serverPlayerDataEntry: sWorldData)
+            if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_PLAYER_STATE))
             {
-                auto serverPlayerDataCopy = serverPlayerDataEntry;
-                serverPlayerDataCopy.mPlayerData.isLocal = serverPlayerDataCopy.mPlayerData.playerName == incomingPlayerData.playerName;
-                playerDataJsonArray.push_back(serverPlayerDataCopy.mPlayerData.SerializeToJson());
-            }
-            
-            worldStateJson[networking::PlayerData::ObjectCollectionHeader()] = playerDataJsonArray;
-            
-            std::string worldStateString = worldStateJson.dump();
-            if (send(clientSocket, worldStateString.c_str(), worldStateString.size(), 0) == -1)
-            {
-                logging::Log(logging::LogType::ERROR, "Error sending message to client");
-                close(clientSocket);
-                return;
+                OnClientPlayerStateMessage(receivedJson, clientSocket);
             }
         }
         catch (const std::exception& e)
