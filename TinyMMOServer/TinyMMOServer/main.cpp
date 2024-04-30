@@ -101,8 +101,8 @@ void SendMessageToClient(nlohmann::json& messageJson, networking::MessageType me
 {
     networking::PopulateMessageHeader(messageJson, messageType);
     
-    std::string messagString = messageJson.dump();
-    if (send(clientSocket, messagString.c_str(), messagString.size(), 0) == -1)
+    std::string messageString = messageJson.dump();
+    if (send(clientSocket, messageString.c_str(), messageString.size(), 0) == -1)
     {
         logging::Log(logging::LogType::ERROR, "Error sending message to client");
         close(clientSocket);
