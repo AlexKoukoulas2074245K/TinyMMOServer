@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <vector>
 
-#include "net_common/PlayerData.h"
+#include "net_common/SerializableNetworkObjects.h"
 #include "util/Date.h"
 #include "util/Json.h"
 #include "util/Logging.h"
@@ -29,19 +29,16 @@ static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 4096;
 
 ///------------------------------------------------------------------------------------------------
 
-struct PlayerData
+struct ServerPlayerData
 {
-    strutils::StringId mPlayerName;
-    glm::vec3 mPlayerPosition;
-    glm::vec3 mPlayerVelocity;
-    float mColor;
+    networking::PlayerData mPlayerData;
     std::chrono::time_point<std::chrono::high_resolution_clock> mLastHeartbeatTimePoint;
 };
 
 ///------------------------------------------------------------------------------------------------
 
 static std::mutex sWorldMutex;
-static std::vector<PlayerData> sWorldData;
+static std::vector<ServerPlayerData> sWorldData;
 
 ///------------------------------------------------------------------------------------------------
 
@@ -63,7 +60,7 @@ void WorldUpdateLoop()
                 auto& playerData = *iter;
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - playerData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
                 {
-                    logging::Log(logging::LogType::INFO, "Kicking player %s due to inactivity (new player count %d)", playerData.mPlayerName.GetString().c_str(), sWorldData.size() - 1);
+                    logging::Log(logging::LogType::INFO, "Kicking player %s due to inactivity (new player count %d)", playerData.mPlayerData.playerName.GetString().c_str(), sWorldData.size() - 1);
                     iter = sWorldData.erase(iter);
                 }
                 else
@@ -80,18 +77,18 @@ void WorldUpdateLoop()
 
 ///------------------------------------------------------------------------------------------------
 
-void UpdateWorldPlayerEntries(PlayerData&& playerData)
+void UpdateWorldPlayerEntries(ServerPlayerData&& playerData)
 {
     std::lock_guard<std::mutex> worldGuard(sWorldMutex);
     
-    auto playerIter = std::find_if(sWorldData.begin(), sWorldData.end(), [&](PlayerData& playerEntry){ return playerEntry.mPlayerName == strutils::StringId(playerData.mPlayerName); });
+    auto playerIter = std::find_if(sWorldData.begin(), sWorldData.end(), [&](ServerPlayerData& playerEntry){ return playerEntry.mPlayerData.playerName == strutils::StringId(playerData.mPlayerData.playerName); });
     if (playerIter != sWorldData.end())
     {
         *playerIter = std::move(playerData);
     }
     else
     {
-        logging::Log(logging::LogType::INFO, "Creating entry for player %s (new player count %d)", playerData.mPlayerName.GetString().c_str(), sWorldData.size() + 1);
+        logging::Log(logging::LogType::INFO, "Creating entry for player %s (new player count %d)", playerData.mPlayerData.playerName.GetString().c_str(), sWorldData.size() + 1);
         sWorldData.insert(playerIter, std::move(playerData));
     }
 }
@@ -136,43 +133,21 @@ void HandleClient(int clientSocket)
         {
             nlohmann::json receivedJson = nlohmann::json::parse(jsonMessage);
             
-            auto playerName = receivedJson["player_name"].get<std::string>();
-            auto playerPosition = glm::vec3(
-                receivedJson["player_position"]["x"].get<float>(),
-                receivedJson["player_position"]["y"].get<float>(),
-                receivedJson["player_position"]["z"].get<float>());
-            auto playerVelocity = glm::vec3(
-                receivedJson["player_velocity"]["x"].get<float>(),
-                receivedJson["player_velocity"]["y"].get<float>(),
-                receivedJson["player_velocity"]["z"].get<float>());
-            float playerColor = receivedJson["player_color"].get<float>();
+            networking::PlayerData incomingPlayerData;
+            incomingPlayerData.DeserializeFromJson(receivedJson);
             
-            UpdateWorldPlayerEntries(PlayerData{ strutils::StringId(playerName), playerPosition, playerVelocity, playerColor, std::chrono::high_resolution_clock::now() });
+            UpdateWorldPlayerEntries(ServerPlayerData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
             
             nlohmann::json worldStateJson;
             nlohmann::json playerDataJsonArray;
-            for (const auto& playerData: sWorldData)
+            for (const auto& serverPlayerDataEntry: sWorldData)
             {
-                nlohmann::json playerDataJson;
-                playerDataJson["player_name"] = playerData.mPlayerName.GetString();
-                playerDataJson["player_color"] = playerData.mColor;
-                
-                nlohmann::json playerPositionJson;
-                playerPositionJson["x"] = playerData.mPlayerPosition.x;
-                playerPositionJson["y"] = playerData.mPlayerPosition.y;
-                playerPositionJson["z"] = playerData.mPlayerPosition.z;
-                playerDataJson["player_position"] = playerPositionJson;
-                
-                nlohmann::json playerVelocityJson;
-                playerVelocityJson["x"] = playerData.mPlayerVelocity.x;
-                playerVelocityJson["y"] = playerData.mPlayerVelocity.y;
-                playerVelocityJson["z"] = playerData.mPlayerVelocity.z;
-                playerDataJson["player_velocity"] = playerVelocityJson;
-                playerDataJson["is_local"] = playerData.mPlayerName == strutils::StringId(playerName);
-                playerDataJsonArray.push_back(playerDataJson);
+                auto serverPlayerDataCopy = serverPlayerDataEntry;
+                serverPlayerDataCopy.mPlayerData.isLocal = serverPlayerDataCopy.mPlayerData.playerName == incomingPlayerData.playerName;
+                playerDataJsonArray.push_back(serverPlayerDataCopy.mPlayerData.SerializeToJson());
             }
             
-            worldStateJson["player_data"] = playerDataJsonArray;
+            worldStateJson["playerData"] = playerDataJsonArray;
             
             std::string worldStateString = worldStateJson.dump();
             if (send(clientSocket, worldStateString.c_str(), worldStateString.size(), 0) == -1)
