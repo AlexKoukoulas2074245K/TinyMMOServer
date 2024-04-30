@@ -19,12 +19,13 @@
 #include "util/Json.h"
 #include "util/Logging.h"
 #include "util/MathUtils.h"
+#include "util/NameGenerator.h"
 #include "util/StringUtils.h"
 
 ///------------------------------------------------------------------------------------------------
 
 static constexpr int WORLD_UPDATE_TARGET_INTERVAL_MILLIS = 16;
-static constexpr int PLAYER_KICK_INTERVAL_SECS = 5;
+static constexpr int PLAYER_KICK_INTERVAL_SECS = 20;
 static constexpr int PORT = 8070;
 static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 4096;
 
@@ -96,12 +97,30 @@ void UpdateWorldPlayerEntries(ServerPlayerData&& playerData)
 
 ///------------------------------------------------------------------------------------------------
 
+void SendMessageToClient(nlohmann::json& messageJson, networking::MessageType messageType, const int clientSocket)
+{
+    networking::PopulateMessageHeader(messageJson, messageType);
+    
+    std::string messagString = messageJson.dump();
+    if (send(clientSocket, messagString.c_str(), messagString.size(), 0) == -1)
+    {
+        logging::Log(logging::LogType::ERROR, "Error sending message to client");
+        close(clientSocket);
+        return;
+    }
+}
+
+///------------------------------------------------------------------------------------------------
+
 void OnClientPlayerStateMessage(const nlohmann::json& json, const int clientSocket)
 {
     networking::PlayerData incomingPlayerData;
     incomingPlayerData.DeserializeFromJson(json);
     
-    UpdateWorldPlayerEntries(ServerPlayerData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
+    if (!incomingPlayerData.playerName.isEmpty())
+    {
+        UpdateWorldPlayerEntries(ServerPlayerData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
+    }
     
     nlohmann::json worldStateJson;
     nlohmann::json playerDataJsonArray;
@@ -113,15 +132,40 @@ void OnClientPlayerStateMessage(const nlohmann::json& json, const int clientSock
     }
     
     worldStateJson[networking::PlayerData::ObjectCollectionHeader()] = playerDataJsonArray;
-    networking::PopulateMessageHeader(worldStateJson, networking::MessageType::SC_PLAYER_STATE_RESPONSE);
     
-    std::string worldStateString = worldStateJson.dump();
-    if (send(clientSocket, worldStateString.c_str(), worldStateString.size(), 0) == -1)
+    SendMessageToClient(worldStateJson, networking::MessageType::SC_PLAYER_STATE_RESPONSE, clientSocket);
+}
+
+///------------------------------------------------------------------------------------------------
+
+void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSocket)
+{
+    std::lock_guard<std::mutex> worldGuard(sWorldMutex);
+    
+    networking::LoginResponse loginResponse;
+    loginResponse.playerPosition = glm::vec3(math::RandomFloat(-0.3f, 0.3f), math::RandomFloat(-0.15f, 0.15f), 0.1f);
+    loginResponse.color = math::RandomFloat(0.0f, 1.0f);
+    loginResponse.allowed = true;
+    loginResponse.playerName = strutils::StringId(GenerateName());
+    
+    if (!sWorldData.empty())
     {
-        logging::Log(logging::LogType::ERROR, "Error sending message to client");
-        close(clientSocket);
-        return;
+        while (std::find_if(sWorldData.begin(), sWorldData.end(), [&](ServerPlayerData& playerEntry){ return playerEntry.mPlayerData.playerName == loginResponse.playerName; }) != sWorldData.end())
+        {
+            loginResponse.playerName = strutils::StringId(GenerateName());
+        }
     }
+    
+    ServerPlayerData placeHolderData;
+    placeHolderData.mPlayerData.playerPosition = loginResponse.playerPosition;
+    placeHolderData.mPlayerData.color = loginResponse.color;
+    placeHolderData.mPlayerData.playerName = loginResponse.playerName;
+    placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
+    
+    sWorldData.push_back(placeHolderData);
+    
+    auto loginResponseJson = loginResponse.SerializeToJson();
+    SendMessageToClient(loginResponseJson, networking::MessageType::SC_REQUEST_LOGIN_RESPONSE, clientSocket);
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -167,6 +211,10 @@ void HandleClient(int clientSocket)
             if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_PLAYER_STATE))
             {
                 OnClientPlayerStateMessage(receivedJson, clientSocket);
+            }
+            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_REQUEST_LOGIN))
+            {
+                OnClientLoginRequestMessage(receivedJson, clientSocket);
             }
         }
         catch (const std::exception& e)
