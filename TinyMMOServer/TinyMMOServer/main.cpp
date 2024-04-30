@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "net_common/PlayerData.h"
 #include "util/Date.h"
 #include "util/Json.h"
 #include "util/Logging.h"
