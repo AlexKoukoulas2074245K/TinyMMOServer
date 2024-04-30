@@ -90,7 +90,6 @@ void UpdateWorldPlayerEntries(ServerPlayerData&& playerData)
     }
     else
     {
-        logging::Log(logging::LogType::INFO, "Creating entry for player %s (new player count %d)", playerData.mPlayerData.playerName.GetString().c_str(), sWorldData.size() + 1);
         sWorldData.insert(playerIter, std::move(playerData));
     }
 }
@@ -155,7 +154,9 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
             loginResponse.playerName = strutils::StringId(GenerateName());
         }
     }
-    
+
+    logging::Log(logging::LogType::INFO, "Creating entry for player %s (new player count %d)", loginResponse.playerName.GetString().c_str(), sWorldData.size() + 1);
+	    
     ServerPlayerData placeHolderData;
     placeHolderData.mPlayerData.playerPosition = loginResponse.playerPosition;
     placeHolderData.mPlayerData.color = loginResponse.color;
@@ -163,7 +164,7 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
     placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
     
     sWorldData.push_back(placeHolderData);
-    
+
     auto loginResponseJson = loginResponse.SerializeToJson();
     SendMessageToClient(loginResponseJson, networking::MessageType::SC_REQUEST_LOGIN_RESPONSE, clientSocket);
 }
