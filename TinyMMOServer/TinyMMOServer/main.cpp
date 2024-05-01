@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "net_common/NetworkMessages.h"
+#include "net_common/WorldObjectTypes.h"
 #include "net_common/SerializableNetworkObjects.h"
 #include "util/Date.h"
 #include "util/Json.h"
@@ -31,16 +32,17 @@ static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 4096;
 
 ///------------------------------------------------------------------------------------------------
 
-struct ServerPlayerData
+struct ServerWorldObjectData
 {
-    networking::PlayerData mPlayerData;
+    networking::WorldObjectData mWorldObjectData;
     std::chrono::time_point<std::chrono::high_resolution_clock> mLastHeartbeatTimePoint;
 };
 
 ///------------------------------------------------------------------------------------------------
 
 static std::mutex sWorldMutex;
-static std::vector<ServerPlayerData> sWorldData;
+static std::vector<ServerWorldObjectData> sWorldObjects;
+static std::atomic<int> sWorldObjectIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
 
@@ -56,14 +58,14 @@ void WorldUpdateLoop()
             // Update world
             std::lock_guard<std::mutex> worldGuard(sWorldMutex);
             
-            for (auto iter = sWorldData.begin(); iter != sWorldData.end(); )
+            for (auto iter = sWorldObjects.begin(); iter != sWorldObjects.end(); )
             {
                 // DC Check
-                auto& playerData = *iter;
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - playerData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
+                auto& serverWorldObjectData = *iter;
+                if (serverWorldObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_PLAYER && std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
                 {
-                    logging::Log(logging::LogType::INFO, "Kicking player %s due to inactivity (new player count %d)", playerData.mPlayerData.playerName.GetString().c_str(), sWorldData.size() - 1);
-                    iter = sWorldData.erase(iter);
+                    logging::Log(logging::LogType::INFO, "Kicking player (id %d) %s due to inactivity (new player count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
+                    iter = sWorldObjects.erase(iter);
                 }
                 else
                 {
@@ -79,18 +81,18 @@ void WorldUpdateLoop()
 
 ///------------------------------------------------------------------------------------------------
 
-void UpdateWorldPlayerEntries(ServerPlayerData&& playerData)
+void UpdateWorldObjectEntries(ServerWorldObjectData&& newObjectData)
 {
     std::lock_guard<std::mutex> worldGuard(sWorldMutex);
     
-    auto playerIter = std::find_if(sWorldData.begin(), sWorldData.end(), [&](ServerPlayerData& playerEntry){ return playerEntry.mPlayerData.playerName == strutils::StringId(playerData.mPlayerData.playerName); });
-    if (playerIter != sWorldData.end())
+    auto objectIter = std::find_if(sWorldObjects.begin(), sWorldObjects.end(), [&](ServerWorldObjectData& objectEntry){ return objectEntry.mWorldObjectData.objectId == newObjectData.mWorldObjectData.objectId; });
+    if (objectIter != sWorldObjects.end())
     {
-        *playerIter = std::move(playerData);
+        *objectIter = std::move(newObjectData);
     }
     else
     {
-        sWorldData.insert(playerIter, std::move(playerData));
+        sWorldObjects.insert(objectIter, std::move(newObjectData));
     }
 }
 
@@ -113,24 +115,24 @@ void SendMessageToClient(nlohmann::json& messageJson, networking::MessageType me
 
 void OnClientPlayerStateMessage(const nlohmann::json& json, const int clientSocket)
 {
-    networking::PlayerData incomingPlayerData;
+    networking::WorldObjectData incomingPlayerData = {};
     incomingPlayerData.DeserializeFromJson(json);
     
-    if (!incomingPlayerData.playerName.isEmpty())
+    if (incomingPlayerData.objectId == 0)
     {
-        UpdateWorldPlayerEntries(ServerPlayerData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
+        UpdateWorldObjectEntries(ServerWorldObjectData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
     }
     
     nlohmann::json worldStateJson;
-    nlohmann::json playerDataJsonArray;
-    for (const auto& serverPlayerDataEntry: sWorldData)
+    nlohmann::json objectJsonArray;
+    for (const auto& serverObjectDataEntry: sWorldObjects)
     {
-        auto serverPlayerDataCopy = serverPlayerDataEntry;
-        serverPlayerDataCopy.mPlayerData.isLocal = serverPlayerDataCopy.mPlayerData.playerName == incomingPlayerData.playerName;
-        playerDataJsonArray.push_back(serverPlayerDataCopy.mPlayerData.SerializeToJson());
+        auto serverObjectDataCopy = serverObjectDataEntry;
+        serverObjectDataCopy.mWorldObjectData.isLocal = serverObjectDataCopy.mWorldObjectData.objectId == incomingPlayerData.objectId;
+        objectJsonArray.push_back(serverObjectDataCopy.mWorldObjectData.SerializeToJson());
     }
     
-    worldStateJson[networking::PlayerData::ObjectCollectionHeader()] = playerDataJsonArray;
+    worldStateJson[networking::WorldObjectData::ObjectCollectionHeader()] = objectJsonArray;
     
     SendMessageToClient(worldStateJson, networking::MessageType::SC_PLAYER_STATE_RESPONSE, clientSocket);
 }
@@ -142,28 +144,31 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
     std::lock_guard<std::mutex> worldGuard(sWorldMutex);
     
     networking::LoginResponse loginResponse;
+    loginResponse.playerId = sWorldObjectIdCounter++;
     loginResponse.playerPosition = glm::vec3(math::RandomFloat(-0.3f, 0.3f), math::RandomFloat(-0.15f, 0.15f), 0.1f);
     loginResponse.color = math::RandomFloat(0.0f, 1.0f);
     loginResponse.allowed = true;
     loginResponse.playerName = strutils::StringId(GenerateName());
     
-    if (!sWorldData.empty())
+    if (!sWorldObjects.empty())
     {
-        while (std::find_if(sWorldData.begin(), sWorldData.end(), [&](ServerPlayerData& playerEntry){ return playerEntry.mPlayerData.playerName == loginResponse.playerName; }) != sWorldData.end())
+        while (std::find_if(sWorldObjects.begin(), sWorldObjects.end(), [&](ServerWorldObjectData& worldObjectEntry){ return worldObjectEntry.mWorldObjectData.objectId == loginResponse.playerId; }) != sWorldObjects.end())
         {
             loginResponse.playerName = strutils::StringId(GenerateName());
         }
     }
 
-    logging::Log(logging::LogType::INFO, "Creating entry for player %s (new player count %d)", loginResponse.playerName.GetString().c_str(), sWorldData.size() + 1);
+    logging::Log(logging::LogType::INFO, "Creating entry for player (id %d): %s (new player count %d)", loginResponse.playerId, loginResponse.playerName.GetString().c_str(), sWorldObjects.size() + 1);
 	    
-    ServerPlayerData placeHolderData;
-    placeHolderData.mPlayerData.playerPosition = loginResponse.playerPosition;
-    placeHolderData.mPlayerData.color = loginResponse.color;
-    placeHolderData.mPlayerData.playerName = loginResponse.playerName;
+    ServerWorldObjectData placeHolderData;
+    placeHolderData.mWorldObjectData.objectId = loginResponse.playerId;
+    placeHolderData.mWorldObjectData.objectPosition = loginResponse.playerPosition;
+    placeHolderData.mWorldObjectData.color = loginResponse.color;
+    placeHolderData.mWorldObjectData.objectName = loginResponse.playerName;
+    placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_PLAYER;
     placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
     
-    sWorldData.push_back(placeHolderData);
+    sWorldObjects.push_back(placeHolderData);
 
     auto loginResponseJson = loginResponse.SerializeToJson();
     SendMessageToClient(loginResponseJson, networking::MessageType::SC_REQUEST_LOGIN_RESPONSE, clientSocket);
