@@ -30,6 +30,9 @@ static constexpr int PLAYER_KICK_INTERVAL_SECS = 20;
 static constexpr int PORT = 8070;
 static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 4096;
 
+static const float SHURIKEN_SPEED = 0.001f;
+static const float SHURIKEN_LIFETIME_SECS = 5.0f;
+
 ///------------------------------------------------------------------------------------------------
 
 struct ServerWorldObjectData
@@ -60,18 +63,35 @@ void WorldUpdateLoop()
             
             for (auto iter = sWorldObjects.begin(); iter != sWorldObjects.end(); )
             {
-                // DC Check
                 auto& serverWorldObjectData = *iter;
-                if (serverWorldObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_PLAYER && std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
+                
+                switch (serverWorldObjectData.mWorldObjectData.objectType)
                 {
-                    logging::Log(logging::LogType::INFO, "Kicking player (id %d) %s due to inactivity (new player count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
-                    iter = sWorldObjects.erase(iter);
+                    case networking::OBJ_TYPE_PLAYER:
+                    {
+                        // Player DC check
+                        if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
+                        {
+                            logging::Log(logging::LogType::INFO, "Kicking player (id %d): %s due to inactivity (new object count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
+                            iter = sWorldObjects.erase(iter);
+                            continue;
+                        }
+                    } break;
+                        
+                    case networking::OBJ_TYPE_NPC_SHURIKEN:
+                    {
+                        serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
+                        
+                        if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > SHURIKEN_LIFETIME_SECS)
+                        {
+                            logging::Log(logging::LogType::INFO, "Destroying shuriken (id %d): %s due to lifetime reached (new object count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
+                            iter = sWorldObjects.erase(iter);
+                            continue;
+                        }
+                    } break;
                 }
-                else
-                {
-                    //playerData.mPlayerPosition += playerData.mPlayerVelocity;
-                    iter++;
-                }
+                
+                iter++;
             }
             
             lastUpdateTimePoint = std::chrono::high_resolution_clock::now();
@@ -118,7 +138,7 @@ void OnClientPlayerStateMessage(const nlohmann::json& json, const int clientSock
     networking::WorldObjectData incomingPlayerData = {};
     incomingPlayerData.DeserializeFromJson(json);
     
-    if (incomingPlayerData.objectId == 0)
+    if (incomingPlayerData.objectId != 0)
     {
         UpdateWorldObjectEntries(ServerWorldObjectData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
     }
@@ -143,24 +163,16 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
 {
     std::lock_guard<std::mutex> worldGuard(sWorldMutex);
     
-    networking::LoginResponse loginResponse;
+    networking::LoginResponse loginResponse = {};
     loginResponse.playerId = sWorldObjectIdCounter++;
     loginResponse.playerPosition = glm::vec3(math::RandomFloat(-0.3f, 0.3f), math::RandomFloat(-0.15f, 0.15f), 0.1f);
     loginResponse.color = math::RandomFloat(0.0f, 1.0f);
     loginResponse.allowed = true;
     loginResponse.playerName = strutils::StringId(GenerateName());
     
-    if (!sWorldObjects.empty())
-    {
-        while (std::find_if(sWorldObjects.begin(), sWorldObjects.end(), [&](ServerWorldObjectData& worldObjectEntry){ return worldObjectEntry.mWorldObjectData.objectId == loginResponse.playerId; }) != sWorldObjects.end())
-        {
-            loginResponse.playerName = strutils::StringId(GenerateName());
-        }
-    }
-
-    logging::Log(logging::LogType::INFO, "Creating entry for player (id %d): %s (new player count %d)", loginResponse.playerId, loginResponse.playerName.GetString().c_str(), sWorldObjects.size() + 1);
+    logging::Log(logging::LogType::INFO, "Creating entry for player (id %d): %s (new object count %d)", loginResponse.playerId, loginResponse.playerName.GetString().c_str(), sWorldObjects.size() + 1);
 	    
-    ServerWorldObjectData placeHolderData;
+    ServerWorldObjectData placeHolderData = {};
     placeHolderData.mWorldObjectData.objectId = loginResponse.playerId;
     placeHolderData.mWorldObjectData.objectPosition = loginResponse.playerPosition;
     placeHolderData.mWorldObjectData.color = loginResponse.color;
@@ -172,6 +184,53 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
 
     auto loginResponseJson = loginResponse.SerializeToJson();
     SendMessageToClient(loginResponseJson, networking::MessageType::SC_REQUEST_LOGIN_RESPONSE, clientSocket);
+}
+
+///------------------------------------------------------------------------------------------------
+
+void OnClientThrowRangedWeaponMessage(const nlohmann::json& json, const int clientSocket)
+{
+    std::lock_guard<std::mutex> worldGuard(sWorldMutex);
+    
+    networking::ThrowRangedWeaponRequest throwRangedWeaponRequest = {};
+    throwRangedWeaponRequest.DeserializeFromJson(json);
+    
+    networking::ThrowRangedWeaponResponse response = {};
+    
+    auto playerObjectIter = std::find_if(sWorldObjects.begin(), sWorldObjects.end(), [&](ServerWorldObjectData& objectEntry){ return objectEntry.mWorldObjectData.objectId == throwRangedWeaponRequest.playerId; });
+    if (playerObjectIter == sWorldObjects.end())
+    {
+        response.allowed = false;
+    }
+    else
+    {
+        const auto& playerPosition = playerObjectIter->mWorldObjectData.objectPosition;
+        auto weaponPosition = playerPosition;
+        weaponPosition.z /= 2.0f;
+        
+        const auto direction = throwRangedWeaponRequest.targetPosition - playerPosition;
+        
+        if (glm::length(direction) <= 0.0f)
+        {
+            response.allowed = false;
+        }
+        else
+        {
+            ServerWorldObjectData weaponData = {};
+            weaponData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
+            weaponData.mWorldObjectData.parentObjectId = playerObjectIter->mWorldObjectData.objectId;
+            weaponData.mWorldObjectData.objectPosition = weaponPosition;
+            weaponData.mWorldObjectData.objectVelocity = glm::normalize(direction) * SHURIKEN_SPEED;
+            weaponData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_SHURIKEN;
+            weaponData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
+
+            response.allowed = true;
+            sWorldObjects.push_back(weaponData);
+        }
+    }
+    
+    auto throwRangedWeaponResponseJson = response.SerializeToJson();
+    SendMessageToClient(throwRangedWeaponResponseJson, networking::MessageType::SC_THROW_RANGED_WEAPON_RESPONSE, clientSocket);
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -221,6 +280,10 @@ void HandleClient(int clientSocket)
             else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_REQUEST_LOGIN))
             {
                 OnClientLoginRequestMessage(receivedJson, clientSocket);
+            }
+            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_THROW_RANGED_WEAPON))
+            {
+                OnClientThrowRangedWeaponMessage(receivedJson, clientSocket);
             }
         }
         catch (const std::exception& e)
