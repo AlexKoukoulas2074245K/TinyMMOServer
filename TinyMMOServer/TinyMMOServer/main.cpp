@@ -5,6 +5,7 @@
 ///  Created by Alex Koukoulas on 25/04/2024
 ///------------------------------------------------------------------------------------------------
 
+#include <atomic>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
