@@ -33,6 +33,7 @@ static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 4096;
 
 static const float SHURIKEN_SPEED = 0.001f;
 static const float SHURIKEN_LIFETIME_SECS = 5.0f;
+static const float ENEMY_RESPAWN_MILLIS = 5000.0f;
 
 ///------------------------------------------------------------------------------------------------
 
@@ -53,6 +54,7 @@ static std::atomic<int> sWorldObjectIdCounter = 1;
 void WorldUpdateLoop()
 {
     auto lastUpdateTimePoint = std::chrono::high_resolution_clock::now();
+    auto enemyRespawnTimer = 0.0f;
     
     while(true)
     {
@@ -61,6 +63,24 @@ void WorldUpdateLoop()
         {
             // Update world
             std::lock_guard<std::mutex> worldGuard(sWorldMutex);
+            
+            enemyRespawnTimer += WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
+            if (enemyRespawnTimer > ENEMY_RESPAWN_MILLIS)
+            {
+                enemyRespawnTimer -= ENEMY_RESPAWN_MILLIS;
+                auto playerCount = std::count_if(sWorldObjects.begin(), sWorldObjects.end(), [](const ServerWorldObjectData& serverObjectData){ return serverObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_PLAYER; });
+                
+                for (auto i = 0; i < playerCount; ++i)
+                {
+                    ServerWorldObjectData placeHolderData = {};
+                    placeHolderData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
+                    placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), 0.1f);
+                    placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
+                    placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
+                    
+                    sWorldObjects.push_back(placeHolderData);
+                }
+            }
             
             for (auto iter = sWorldObjects.begin(); iter != sWorldObjects.end(); )
             {
@@ -85,7 +105,6 @@ void WorldUpdateLoop()
                         
                         if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > SHURIKEN_LIFETIME_SECS)
                         {
-                            logging::Log(logging::LogType::INFO, "Destroying shuriken (id %d): %s due to lifetime reached (new object count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
                             iter = sWorldObjects.erase(iter);
                             continue;
                         }
