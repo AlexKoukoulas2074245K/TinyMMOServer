@@ -166,7 +166,7 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
     
     networking::LoginResponse loginResponse = {};
     loginResponse.playerId = sWorldObjectIdCounter++;
-    loginResponse.playerPosition = glm::vec3(math::RandomFloat(-0.3f, 0.3f), math::RandomFloat(-0.15f, 0.15f), 0.1f);
+    loginResponse.playerPosition = glm::vec3(math::RandomFloat(-0.3f, -0.1f), math::RandomFloat(-0.15f, 0.15f), 0.1f);
     loginResponse.color = math::RandomFloat(0.0f, 1.0f);
     loginResponse.allowed = true;
     loginResponse.playerName = strutils::StringId(GenerateName());
