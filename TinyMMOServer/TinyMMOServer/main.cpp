@@ -51,10 +51,72 @@ static std::atomic<int> sWorldObjectIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
 
+void EnemyRespawnCheck()
+{
+    static float enemyRespawnTimer = 0.0f;
+    
+    enemyRespawnTimer += WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
+    if (enemyRespawnTimer > ENEMY_RESPAWN_MILLIS)
+    {
+        enemyRespawnTimer -= ENEMY_RESPAWN_MILLIS;
+        auto playerCount = std::count_if(sWorldObjects.begin(), sWorldObjects.end(), [](const ServerWorldObjectData& serverObjectData){ return serverObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_PLAYER; });
+        
+        for (auto i = 0; i < playerCount; ++i)
+        {
+            ServerWorldObjectData placeHolderData = {};
+            placeHolderData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
+            placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), math::RandomFloat(0.01f, 0.09f));
+            placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
+            placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
+            
+            sWorldObjects.push_back(placeHolderData);
+        }
+    }
+    
+}
+
+///------------------------------------------------------------------------------------------------
+
+void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
+{
+    for (auto iter = sWorldObjects.begin(); iter != sWorldObjects.end(); )
+    {
+        auto& serverWorldObjectData = *iter;
+        
+        switch (serverWorldObjectData.mWorldObjectData.objectType)
+        {
+            case networking::OBJ_TYPE_PLAYER:
+            {
+                // Player DC check
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
+                {
+                    logging::Log(logging::LogType::INFO, "Kicking player (id %d): %s due to inactivity (new object count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
+                    iter = sWorldObjects.erase(iter);
+                    continue;
+                }
+            } break;
+                
+            case networking::OBJ_TYPE_NPC_SHURIKEN:
+            {
+                serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
+                
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > SHURIKEN_LIFETIME_SECS)
+                {
+                    iter = sWorldObjects.erase(iter);
+                    continue;
+                }
+            } break;
+        }
+        
+        iter++;
+    }
+}
+
+///------------------------------------------------------------------------------------------------
+
 void WorldUpdateLoop()
 {
     auto lastUpdateTimePoint = std::chrono::high_resolution_clock::now();
-    auto enemyRespawnTimer = 0.0f;
     
     while(true)
     {
@@ -64,55 +126,8 @@ void WorldUpdateLoop()
             // Update world
             std::lock_guard<std::mutex> worldGuard(sWorldMutex);
             
-            enemyRespawnTimer += WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
-            if (enemyRespawnTimer > ENEMY_RESPAWN_MILLIS)
-            {
-                enemyRespawnTimer -= ENEMY_RESPAWN_MILLIS;
-                auto playerCount = std::count_if(sWorldObjects.begin(), sWorldObjects.end(), [](const ServerWorldObjectData& serverObjectData){ return serverObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_PLAYER; });
-                
-                for (auto i = 0; i < playerCount; ++i)
-                {
-                    ServerWorldObjectData placeHolderData = {};
-                    placeHolderData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
-                    placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), 0.1f);
-                    placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
-                    placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
-                    
-                    sWorldObjects.push_back(placeHolderData);
-                }
-            }
-            
-            for (auto iter = sWorldObjects.begin(); iter != sWorldObjects.end(); )
-            {
-                auto& serverWorldObjectData = *iter;
-                
-                switch (serverWorldObjectData.mWorldObjectData.objectType)
-                {
-                    case networking::OBJ_TYPE_PLAYER:
-                    {
-                        // Player DC check
-                        if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
-                        {
-                            logging::Log(logging::LogType::INFO, "Kicking player (id %d): %s due to inactivity (new object count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
-                            iter = sWorldObjects.erase(iter);
-                            continue;
-                        }
-                    } break;
-                        
-                    case networking::OBJ_TYPE_NPC_SHURIKEN:
-                    {
-                        serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
-                        
-                        if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > SHURIKEN_LIFETIME_SECS)
-                        {
-                            iter = sWorldObjects.erase(iter);
-                            continue;
-                        }
-                    } break;
-                }
-                
-                iter++;
-            }
+            EnemyRespawnCheck();
+            UpdateWorldObjects(now);
             
             lastUpdateTimePoint = std::chrono::high_resolution_clock::now();
         }
@@ -121,7 +136,7 @@ void WorldUpdateLoop()
 
 ///------------------------------------------------------------------------------------------------
 
-void UpdateWorldObjectEntries(ServerWorldObjectData&& newObjectData)
+void ReplaceWorldObjectDataWithClientState(ServerWorldObjectData&& newObjectData)
 {
     std::lock_guard<std::mutex> worldGuard(sWorldMutex);
     
@@ -160,7 +175,7 @@ void OnClientPlayerStateMessage(const nlohmann::json& json, const int clientSock
     
     if (incomingPlayerData.objectId != 0)
     {
-        UpdateWorldObjectEntries(ServerWorldObjectData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
+        ReplaceWorldObjectDataWithClientState(ServerWorldObjectData{incomingPlayerData, std::chrono::high_resolution_clock::now() });
     }
     
     nlohmann::json worldStateJson;
