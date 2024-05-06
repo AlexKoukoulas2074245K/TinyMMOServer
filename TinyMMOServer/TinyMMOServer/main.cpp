@@ -28,7 +28,7 @@
 
 ///------------------------------------------------------------------------------------------------
 
-static constexpr int WORLD_UPDATE_TARGET_INTERVAL_MILLIS = 16;
+static constexpr float WORLD_UPDATE_TARGET_INTERVAL_MILLIS = 16.66666f;
 static constexpr int PLAYER_KICK_INTERVAL_SECS = 20;
 static constexpr int PORT = 8070;
 static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 8192;
@@ -138,7 +138,7 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                     continue;
                 }
                 
-                serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
+                serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
                 
                 // Shuriken collision
                 for (auto* otherWorldObjectData: shurikenObjects)
@@ -193,7 +193,7 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
             {
                 if (serverWorldObjectData.mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
                 {
-                    serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
+                    serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
                 }
                 
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > SHURIKEN_LIFETIME_SECS)
