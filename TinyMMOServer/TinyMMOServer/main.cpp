@@ -12,10 +12,12 @@
 #include <mutex>
 #include <thread>
 #include <unistd.h>
+#include <unordered_set>
 #include <vector>
 
 #include "net_common/NetworkMessages.h"
 #include "net_common/WorldObjectTypes.h"
+#include "net_common/WorldObjectStates.h"
 #include "net_common/SerializableNetworkObjects.h"
 #include "util/Date.h"
 #include "util/Json.h"
@@ -29,11 +31,14 @@
 static constexpr int WORLD_UPDATE_TARGET_INTERVAL_MILLIS = 16;
 static constexpr int PLAYER_KICK_INTERVAL_SECS = 20;
 static constexpr int PORT = 8070;
-static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 4096;
+static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 8192;
 
 static const float SHURIKEN_SPEED = 0.001f;
 static const float SHURIKEN_LIFETIME_SECS = 5.0f;
-static const float ENEMY_RESPAWN_MILLIS = 5000.0f;
+static const float ENEMY_RESPAWN_MILLIS = 1000.0f;
+static const float COLLISION_RADIUS = 0.02f;
+static const float CHASING_RADIUS = 0.2f;
+static const float ENEMY_SPEED = 0.0002f;
 
 ///------------------------------------------------------------------------------------------------
 
@@ -47,12 +52,14 @@ struct ServerWorldObjectData
 
 static std::mutex sWorldMutex;
 static std::vector<ServerWorldObjectData> sWorldObjects;
-static std::atomic<int> sWorldObjectIdCounter = 1;
+static std::atomic<long long> sWorldObjectIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
 
 void EnemyRespawnCheck()
 {
+    std::lock_guard<std::mutex> worldGuard(sWorldMutex);
+    
     static float enemyRespawnTimer = 0.0f;
     
     enemyRespawnTimer += WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
@@ -60,6 +67,12 @@ void EnemyRespawnCheck()
     {
         enemyRespawnTimer -= ENEMY_RESPAWN_MILLIS;
         auto playerCount = std::count_if(sWorldObjects.begin(), sWorldObjects.end(), [](const ServerWorldObjectData& serverObjectData){ return serverObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_PLAYER; });
+        auto enemyCount = std::count_if(sWorldObjects.begin(), sWorldObjects.end(), [](const ServerWorldObjectData& serverObjectData){ return serverObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_NPC_ENEMY; });
+        
+        if (enemyCount >= playerCount)
+        {
+            return;
+        }
         
         for (auto i = 0; i < playerCount; ++i)
         {
@@ -67,6 +80,7 @@ void EnemyRespawnCheck()
             placeHolderData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
             placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), math::RandomFloat(0.01f, 0.09f));
             placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
+            placeHolderData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
             placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
             
             sWorldObjects.push_back(placeHolderData);
@@ -79,10 +93,31 @@ void EnemyRespawnCheck()
 
 void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
 {
-    for (auto iter = sWorldObjects.begin(); iter != sWorldObjects.end(); )
+    std::lock_guard<std::mutex> worldGuard(sWorldMutex);
+    
+    static std::vector<ServerWorldObjectData*> shurikenObjects;
+    static std::vector<ServerWorldObjectData*> playerObjects;
+    
+    for (auto& serverWorldObjectData: sWorldObjects)
     {
-        auto& serverWorldObjectData = *iter;
-        
+        switch (serverWorldObjectData.mWorldObjectData.objectType)
+        {
+            case networking::OBJ_TYPE_PLAYER:
+            {
+                playerObjects.push_back(&serverWorldObjectData);
+            } break;
+                
+            case networking::OBJ_TYPE_NPC_SHURIKEN:
+            {
+                shurikenObjects.push_back(&serverWorldObjectData);
+            } break;
+                
+            default: break;
+        }
+    }
+    
+    for (auto& serverWorldObjectData: sWorldObjects)
+    {
         switch (serverWorldObjectData.mWorldObjectData.objectType)
         {
             case networking::OBJ_TYPE_PLAYER:
@@ -91,24 +126,105 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > PLAYER_KICK_INTERVAL_SECS)
                 {
                     logging::Log(logging::LogType::INFO, "Kicking player (id %d): %s due to inactivity (new object count %d)", serverWorldObjectData.mWorldObjectData.objectId, serverWorldObjectData.mWorldObjectData.objectName.GetString().c_str(), sWorldObjects.size() - 1);
-                    iter = sWorldObjects.erase(iter);
+                    serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
                     continue;
+                }
+            } break;
+            
+            case networking::OBJ_TYPE_NPC_ENEMY:
+            {
+                if (serverWorldObjectData.mWorldObjectData.objectState == networking::OBJ_STATE_DEAD)
+                {
+                    continue;
+                }
+                
+                serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
+                
+                // Shuriken collision
+                for (auto* otherWorldObjectData: shurikenObjects)
+                {
+                    if (otherWorldObjectData->mWorldObjectData.objectType == networking::OBJ_TYPE_NPC_SHURIKEN &&
+                        otherWorldObjectData->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
+                    {
+                        if (math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.x - serverWorldObjectData.mWorldObjectData.objectPosition.x) < COLLISION_RADIUS &&
+                            math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.y - serverWorldObjectData.mWorldObjectData.objectPosition.y) < COLLISION_RADIUS)
+                        {
+                            serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
+                            otherWorldObjectData->mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
+                            break;
+                        }
+                    }
+                }
+                
+                // Player chasing initiation
+                if (serverWorldObjectData.mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
+                {
+                    for (auto* otherWorldObjectData: playerObjects)
+                    {
+                        if (otherWorldObjectData->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE &&
+                            math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.x - serverWorldObjectData.mWorldObjectData.objectPosition.x) < CHASING_RADIUS &&
+                            math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.y - serverWorldObjectData.mWorldObjectData.objectPosition.y) < CHASING_RADIUS)
+                        {
+                            serverWorldObjectData.mWorldObjectData.parentObjectId = otherWorldObjectData->mWorldObjectData.objectId;
+                            serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_CHASING;
+                            break;
+                        }
+                    }
+                }
+                // Player chasing
+                else if (serverWorldObjectData.mWorldObjectData.objectState == networking::OBJ_STATE_CHASING)
+                {
+                    auto playerObjectDataIter = std::find_if(playerObjects.begin(), playerObjects.end(), [&](const ServerWorldObjectData* playerObjectData){ return playerObjectData->mWorldObjectData.objectId == serverWorldObjectData.mWorldObjectData.parentObjectId; });
+                    if (playerObjectDataIter != playerObjects.end() && (*playerObjectDataIter)->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
+                    {
+                        auto& playerObjectData = (*playerObjectDataIter)->mWorldObjectData;
+                        serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(playerObjectData.objectPosition - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
+                        serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                    }
+                    else
+                    {
+                        serverWorldObjectData.mWorldObjectData.objectVelocity = {};
+                        serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
+                    }
                 }
             } break;
                 
             case networking::OBJ_TYPE_NPC_SHURIKEN:
             {
-                serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
+                if (serverWorldObjectData.mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
+                {
+                    serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * static_cast<float>(WORLD_UPDATE_TARGET_INTERVAL_MILLIS);
+                }
                 
                 if (std::chrono::duration_cast<std::chrono::seconds>(now - serverWorldObjectData.mLastHeartbeatTimePoint).count() > SHURIKEN_LIFETIME_SECS)
                 {
-                    iter = sWorldObjects.erase(iter);
+                    serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
                     continue;
                 }
             } break;
         }
-        
-        iter++;
+    }
+    
+    shurikenObjects.clear();
+    playerObjects.clear();
+}
+
+///------------------------------------------------------------------------------------------------
+
+void CleanUpWorldObjects()
+{
+    std::lock_guard<std::mutex> worldGuard(sWorldMutex);
+    
+    for (auto iter = sWorldObjects.begin(); iter != sWorldObjects.end(); )
+    {
+        if (iter->mWorldObjectData.objectState == networking::OBJ_STATE_DEAD)
+        {
+            iter = sWorldObjects.erase(iter);
+        }
+        else
+        {
+            iter++;
+        }
     }
 }
 
@@ -123,11 +239,9 @@ void WorldUpdateLoop()
         auto now = std::chrono::high_resolution_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastUpdateTimePoint).count() > WORLD_UPDATE_TARGET_INTERVAL_MILLIS)
         {
-            // Update world
-            std::lock_guard<std::mutex> worldGuard(sWorldMutex);
-            
             EnemyRespawnCheck();
             UpdateWorldObjects(now);
+            CleanUpWorldObjects();
             
             lastUpdateTimePoint = std::chrono::high_resolution_clock::now();
         }
@@ -213,6 +327,7 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
     placeHolderData.mWorldObjectData.color = loginResponse.color;
     placeHolderData.mWorldObjectData.objectName = loginResponse.playerName;
     placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_PLAYER;
+    placeHolderData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
     placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
     
     sWorldObjects.push_back(placeHolderData);
@@ -257,6 +372,7 @@ void OnClientThrowRangedWeaponMessage(const nlohmann::json& json, const int clie
             weaponData.mWorldObjectData.objectPosition = weaponPosition;
             weaponData.mWorldObjectData.objectVelocity = glm::normalize(direction) * SHURIKEN_SPEED;
             weaponData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_SHURIKEN;
+            weaponData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
             weaponData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
 
             response.allowed = true;
