@@ -4,7 +4,7 @@
 *.xcuserstate
 *project.*
 *xcschememanagement.plist
-server
+mmoserver
 
 # Temporaries
 *.*~
