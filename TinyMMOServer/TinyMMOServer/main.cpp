@@ -38,6 +38,8 @@ static const float SHURIKEN_LIFETIME_SECS = 5.0f;
 static const float ENEMY_RESPAWN_MILLIS = 1000.0f;
 static const float COLLISION_RADIUS = 0.02f;
 static const float CHASING_RADIUS = 0.2f;
+static const float PLAYER_Z = 0.2f;
+static const float SHURIKEN_Z = 0.19f;
 static const float ENEMY_SPEED = 0.0002f;
 
 ///------------------------------------------------------------------------------------------------
@@ -78,7 +80,7 @@ void EnemyRespawnCheck()
         {
             ServerWorldObjectData placeHolderData = {};
             placeHolderData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
-            placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), math::RandomFloat(0.01f, 0.09f));
+            placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), math::RandomFloat(0.11f, 0.19f));
             placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
             placeHolderData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
             placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
@@ -314,7 +316,7 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
     
     networking::LoginResponse loginResponse = {};
     loginResponse.playerId = sWorldObjectIdCounter++;
-    loginResponse.playerPosition = glm::vec3(math::RandomFloat(-0.3f, -0.1f), math::RandomFloat(-0.15f, 0.15f), 0.1f);
+    loginResponse.playerPosition = glm::vec3(math::RandomFloat(-0.3f, -0.1f), math::RandomFloat(-0.15f, 0.15f), PLAYER_Z);
     loginResponse.color = math::RandomFloat(0.0f, 1.0f);
     loginResponse.allowed = true;
     loginResponse.playerName = strutils::StringId(GenerateName());
@@ -356,7 +358,7 @@ void OnClientThrowRangedWeaponMessage(const nlohmann::json& json, const int clie
     {
         const auto& playerPosition = playerObjectIter->mWorldObjectData.objectPosition;
         auto weaponPosition = playerPosition;
-        weaponPosition.z /= 2.0f;
+        weaponPosition.z = SHURIKEN_Z;
         
         const auto direction = throwRangedWeaponRequest.targetPosition - playerPosition;
         
