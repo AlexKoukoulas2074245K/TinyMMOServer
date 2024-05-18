@@ -37,7 +37,7 @@
       enableAddressSanitizer = "YES"
       enableUBSanitizer = "YES"
       launchStyle = "0"
-      useCustomWorkingDirectory = "NO"
+      useCustomWorkingDirectory = "YES"
       customWorkingDirectory = "/Users/Code/TinyMMOServer/TinyMMOServer"
       ignoresPersistentStateOnLaunch = "NO"
       debugDocumentVersioning = "YES"
@@ -54,6 +54,12 @@
             ReferencedContainer = "container:TinyMMOServer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <CommandLineArguments>
+         <CommandLineArgument
+            argument = "/Users/Code/TinyMMOServer/TinyMMOServer/TinyMMOServer/source_net_common/net_assets"
+            isEnabled = "YES">
+         </CommandLineArgument>
+      </CommandLineArguments>
       <AdditionalOptions>
          <AdditionalOption
             key = "NSZombieEnabled"

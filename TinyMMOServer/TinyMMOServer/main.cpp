@@ -25,6 +25,7 @@
 #include "util/MathUtils.h"
 #include "util/NameGenerator.h"
 #include "util/StringUtils.h"
+#include "util/lodepng.h"
 
 ///------------------------------------------------------------------------------------------------
 
@@ -483,7 +484,38 @@ void HandleClient(int clientSocket)
 
 int main(int argc, char* argv[])
 {
+    if (argc < 2)
+    {
+        logging::Log(logging::LogType::INFO, "Asset Directory not provided");
+        exit(EXIT_FAILURE);
+    }
+    
     logging::Log(logging::LogType::INFO, "Initializing server from CWD: %s", argv[0]);
+    logging::Log(logging::LogType::INFO, "Asset Directory: %s", argv[1]);
+    
+    std::vector<unsigned char> png;
+    std::vector<unsigned char> image; //the raw pixels
+    unsigned width, height;
+    lodepng::State state; //optionally customize this one
+
+    unsigned error = lodepng::load_file(png, (std::string(argv[1]) + "/navmaps/entry_map_navmap.png").c_str()); //load the image file with given filename
+    
+    if(!error) error = lodepng::decode(image, width, height, state, png);
+    //if there's an error, display it
+    if(error) logging::Log(logging::LogType::ERROR, "PNG Loading Error %d: %s", error, lodepng_error_text(error));
+    // 39,57 black    40,58 white
+    int blkR = image[(128 * 4) * 57 + 39 * 4 + 0];
+    int blkG = image[(128 * 4) * 57 + 39 * 4 + 1];
+    int blkB = image[(128 * 4) * 57 + 39 * 4 + 2];
+    int blkA = image[(128 * 4) * 57 + 39 * 4 + 3];
+    
+    int whtR = image[(128 * 4) * 58 + 40 * 4 + 0];
+    int whtG = image[(128 * 4) * 58 + 40 * 4 + 1];
+    int whtB = image[(128 * 4) * 58 + 40 * 4 + 2];
+    int whtA = image[(128 * 4) * 58 + 40 * 4 + 3];
+    
+    logging::Log(logging::LogType::INFO, "Black pixel: %d,%d,%d,%d", blkR, blkG, blkB, blkA);
+    logging::Log(logging::LogType::INFO, "White pixel: %d,%d,%d,%d", whtR, whtG, whtB, whtA);
     
     int serverSocket, clientSocket;
     struct sockaddr_in serverAddr, clientAddr;
