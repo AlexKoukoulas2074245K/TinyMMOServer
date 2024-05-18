@@ -40,7 +40,7 @@ static const float COLLISION_RADIUS = 0.02f;
 static const float CHASING_RADIUS = 0.2f;
 static const float PLAYER_Z = 0.2f;
 static const float SHURIKEN_Z = 0.19f;
-static const float ENEMY_SPEED = 0.0002f;
+static const float ENEMY_SPEED = 0.0001f;
 
 ///------------------------------------------------------------------------------------------------
 
@@ -81,6 +81,8 @@ void EnemyRespawnCheck()
             ServerWorldObjectData placeHolderData = {};
             placeHolderData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
             placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), math::RandomFloat(0.11f, 0.19f));
+            placeHolderData.mWorldObjectData.objectCampPosition = placeHolderData.mWorldObjectData.objectPosition;
+            placeHolderData.mWorldObjectData.objectCurrentMapName = strutils::StringId("map_tower");
             placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
             placeHolderData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
             placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
@@ -146,6 +148,7 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                     for (auto* otherWorldObjectData: playerObjects)
                     {
                         if (otherWorldObjectData->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE &&
+                            otherWorldObjectData->mWorldObjectData.objectCurrentMapName == serverWorldObjectData.mWorldObjectData.objectCurrentMapName &&
                             math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.x - serverWorldObjectData.mWorldObjectData.objectPosition.x) < CHASING_RADIUS &&
                             math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.y - serverWorldObjectData.mWorldObjectData.objectPosition.y) < CHASING_RADIUS)
                         {
@@ -162,13 +165,38 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                     if (playerObjectDataIter != playerObjects.end() && (*playerObjectDataIter)->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
                     {
                         auto& playerObjectData = (*playerObjectDataIter)->mWorldObjectData;
-                        serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(playerObjectData.objectPosition - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
-                        serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                        if (playerObjectData.objectCurrentMapName != serverWorldObjectData.mWorldObjectData.objectCurrentMapName)
+                        {
+                            serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_RETREATING;
+                        }
+                        else
+                        {
+                            serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(playerObjectData.objectPosition - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
+                            serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                        }
                     }
                     else
                     {
                         serverWorldObjectData.mWorldObjectData.objectVelocity = {};
                         serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
+                    }
+                }
+                // Retreating to camp
+                else if (serverWorldObjectData.mWorldObjectData.objectState == networking::OBJ_STATE_RETREATING)
+                {
+                    auto directionToCampPosition = serverWorldObjectData.mWorldObjectData.objectCampPosition - serverWorldObjectData.mWorldObjectData.objectPosition;
+                    auto distanceToTarget = glm::length(directionToCampPosition);
+                    
+                    if (distanceToTarget <= 0.0f || distanceToTarget < glm::length(glm::normalize(directionToCampPosition) * ENEMY_SPEED * WORLD_UPDATE_TARGET_INTERVAL_MILLIS))
+                    {
+                        serverWorldObjectData.mWorldObjectData.objectPosition = serverWorldObjectData.mWorldObjectData.objectCampPosition;
+                        serverWorldObjectData.mWorldObjectData.objectVelocity = {};
+                        serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
+                    }
+                    else
+                    {
+                        serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(directionToCampPosition) * ENEMY_SPEED;
+                        serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
                     }
                 }
                 
@@ -320,6 +348,7 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
     loginResponse.color = math::RandomFloat(0.0f, 1.0f);
     loginResponse.allowed = true;
     loginResponse.playerName = strutils::StringId(GenerateName());
+    loginResponse.playerCurrentMapName = strutils::StringId("entry_map");
     
     logging::Log(logging::LogType::INFO, "Creating entry for player (id %d): %s (new object count %d)", loginResponse.playerId, loginResponse.playerName.GetString().c_str(), sWorldObjects.size() + 1);
 	    
@@ -328,6 +357,7 @@ void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSoc
     placeHolderData.mWorldObjectData.objectPosition = loginResponse.playerPosition;
     placeHolderData.mWorldObjectData.color = loginResponse.color;
     placeHolderData.mWorldObjectData.objectName = loginResponse.playerName;
+    placeHolderData.mWorldObjectData.objectCurrentMapName = loginResponse.playerCurrentMapName;
     placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_PLAYER;
     placeHolderData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
     placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
@@ -373,6 +403,7 @@ void OnClientThrowRangedWeaponMessage(const nlohmann::json& json, const int clie
             weaponData.mWorldObjectData.parentObjectId = playerObjectIter->mWorldObjectData.objectId;
             weaponData.mWorldObjectData.objectPosition = weaponPosition;
             weaponData.mWorldObjectData.objectVelocity = glm::normalize(direction) * SHURIKEN_SPEED;
+            weaponData.mWorldObjectData.objectCurrentMapName = playerObjectIter->mWorldObjectData.objectCurrentMapName;
             weaponData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_SHURIKEN;
             weaponData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
             weaponData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
