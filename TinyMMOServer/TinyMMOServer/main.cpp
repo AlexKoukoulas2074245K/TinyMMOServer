@@ -13,6 +13,7 @@
 #include <thread>
 #include <unistd.h>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 #include "net_common/NetworkMessages.h"
@@ -20,6 +21,7 @@
 #include "net_common/WorldObjectStates.h"
 #include "net_common/SerializableNetworkObjects.h"
 #include "util/Date.h"
+#include "util/FileUtils.h"
 #include "util/Json.h"
 #include "util/Logging.h"
 #include "util/MathUtils.h"
@@ -55,6 +57,7 @@ struct ServerWorldObjectData
 
 static std::mutex sWorldMutex;
 static std::vector<ServerWorldObjectData> sWorldObjects;
+static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapNamesToPixels;
 static std::atomic<long long> sWorldObjectIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
@@ -482,6 +485,40 @@ void HandleClient(int clientSocket)
 
 ///------------------------------------------------------------------------------------------------
 
+void LoadNavmapData(const std::string& assetsDirectory)
+{
+    auto navmapFilePaths = fileutils::GetAllFilenamesAndFolderNamesInDirectory(assetsDirectory + "/navmaps/");
+    
+    for (const auto& navmapFileName: navmapFilePaths)
+    {
+        std::vector<unsigned char> rawPNG;
+        std::vector<unsigned char> navmapPixels;
+        
+        unsigned width, height;
+        lodepng::State state;
+
+        auto error = lodepng::load_file(rawPNG, assetsDirectory + "/navmaps/" + navmapFileName); //load the image file with given filename
+        
+        if (!error)
+        {
+            error = lodepng::decode(navmapPixels, width, height, state, rawPNG);
+        }
+        
+        if(error)
+        {
+            logging::Log(logging::LogType::ERROR, "PNG Loading Error %d: %s", error, lodepng_error_text(error));
+        }
+        else
+        {
+            sNavmapNamesToPixels[strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png")))] = std::move(navmapPixels);
+        }
+    }
+    
+    logging::Log(logging::LogType::INFO, "Loaded Navmap data for %lu maps.", sNavmapNamesToPixels.size());
+}
+
+///------------------------------------------------------------------------------------------------
+
 int main(int argc, char* argv[])
 {
     if (argc < 2)
@@ -493,29 +530,22 @@ int main(int argc, char* argv[])
     logging::Log(logging::LogType::INFO, "Initializing server from CWD: %s", argv[0]);
     logging::Log(logging::LogType::INFO, "Asset Directory: %s", argv[1]);
     
-    std::vector<unsigned char> png;
-    std::vector<unsigned char> image; //the raw pixels
-    unsigned width, height;
-    lodepng::State state; //optionally customize this one
+    LoadNavmapData(argv[1]);
+    
 
-    unsigned error = lodepng::load_file(png, (std::string(argv[1]) + "/navmaps/entry_map_navmap.png").c_str()); //load the image file with given filename
-    
-    if(!error) error = lodepng::decode(image, width, height, state, png);
-    //if there's an error, display it
-    if(error) logging::Log(logging::LogType::ERROR, "PNG Loading Error %d: %s", error, lodepng_error_text(error));
     // 39,57 black    40,58 white
-    int blkR = image[(128 * 4) * 57 + 39 * 4 + 0];
-    int blkG = image[(128 * 4) * 57 + 39 * 4 + 1];
-    int blkB = image[(128 * 4) * 57 + 39 * 4 + 2];
-    int blkA = image[(128 * 4) * 57 + 39 * 4 + 3];
-    
-    int whtR = image[(128 * 4) * 58 + 40 * 4 + 0];
-    int whtG = image[(128 * 4) * 58 + 40 * 4 + 1];
-    int whtB = image[(128 * 4) * 58 + 40 * 4 + 2];
-    int whtA = image[(128 * 4) * 58 + 40 * 4 + 3];
-    
-    logging::Log(logging::LogType::INFO, "Black pixel: %d,%d,%d,%d", blkR, blkG, blkB, blkA);
-    logging::Log(logging::LogType::INFO, "White pixel: %d,%d,%d,%d", whtR, whtG, whtB, whtA);
+//    int blkR = image[(128 * 4) * 57 + 39 * 4 + 0];
+//    int blkG = image[(128 * 4) * 57 + 39 * 4 + 1];
+//    int blkB = image[(128 * 4) * 57 + 39 * 4 + 2];
+//    int blkA = image[(128 * 4) * 57 + 39 * 4 + 3];
+//    
+//    int whtR = image[(128 * 4) * 58 + 40 * 4 + 0];
+//    int whtG = image[(128 * 4) * 58 + 40 * 4 + 1];
+//    int whtB = image[(128 * 4) * 58 + 40 * 4 + 2];
+//    int whtA = image[(128 * 4) * 58 + 40 * 4 + 3];
+//    
+//    logging::Log(logging::LogType::INFO, "Black pixel: %d,%d,%d,%d", blkR, blkG, blkB, blkA);
+//    logging::Log(logging::LogType::INFO, "White pixel: %d,%d,%d,%d", whtR, whtG, whtB, whtA);
     
     int serverSocket, clientSocket;
     struct sockaddr_in serverAddr, clientAddr;
