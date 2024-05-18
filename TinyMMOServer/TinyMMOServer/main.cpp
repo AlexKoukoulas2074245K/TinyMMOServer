@@ -140,24 +140,6 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                     continue;
                 }
                 
-                serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
-                
-                // Shuriken collision
-                for (auto* otherWorldObjectData: shurikenObjects)
-                {
-                    if (otherWorldObjectData->mWorldObjectData.objectType == networking::OBJ_TYPE_NPC_SHURIKEN &&
-                        otherWorldObjectData->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
-                    {
-                        if (math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.x - serverWorldObjectData.mWorldObjectData.objectPosition.x) < COLLISION_RADIUS &&
-                            math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.y - serverWorldObjectData.mWorldObjectData.objectPosition.y) < COLLISION_RADIUS)
-                        {
-                            serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
-                            otherWorldObjectData->mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
-                            break;
-                        }
-                    }
-                }
-                
                 // Player chasing initiation
                 if (serverWorldObjectData.mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
                 {
@@ -187,6 +169,24 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                     {
                         serverWorldObjectData.mWorldObjectData.objectVelocity = {};
                         serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
+                    }
+                }
+                
+                serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
+                
+                // Shuriken collision
+                for (auto* otherWorldObjectData: shurikenObjects)
+                {
+                    if (otherWorldObjectData->mWorldObjectData.objectType == networking::OBJ_TYPE_NPC_SHURIKEN &&
+                        otherWorldObjectData->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
+                    {
+                        if (math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.x - serverWorldObjectData.mWorldObjectData.objectPosition.x) < COLLISION_RADIUS &&
+                            math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.y - serverWorldObjectData.mWorldObjectData.objectPosition.y) < COLLISION_RADIUS)
+                        {
+                            serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
+                            otherWorldObjectData->mWorldObjectData.objectState = networking::OBJ_STATE_DEAD;
+                            break;
+                        }
                     }
                 }
             } break;
