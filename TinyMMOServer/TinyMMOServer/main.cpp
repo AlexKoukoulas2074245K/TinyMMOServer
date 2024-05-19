@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "net_common/Navmap.h"
 #include "net_common/NetworkMessages.h"
 #include "net_common/WorldObjectTypes.h"
 #include "net_common/WorldObjectStates.h"
@@ -35,6 +36,7 @@ static constexpr float WORLD_UPDATE_TARGET_INTERVAL_MILLIS = 16.66666f;
 static constexpr int PLAYER_KICK_INTERVAL_SECS = 20;
 static constexpr int PORT = 8070;
 static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 8192;
+static constexpr int SERVER_NAVMAP_IMAGE_SIZE = 128;
 
 static const float SHURIKEN_SPEED = 0.001f;
 static const float SHURIKEN_LIFETIME_SECS = 5.0f;
@@ -57,7 +59,7 @@ struct ServerWorldObjectData
 
 static std::mutex sWorldMutex;
 static std::vector<ServerWorldObjectData> sWorldObjects;
-static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapNamesToPixels;
+static std::unordered_map<strutils::StringId, networking::Navmap, strutils::StringIdHasher> sNavmaps;
 static std::atomic<long long> sWorldObjectIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
@@ -510,11 +512,11 @@ void LoadNavmapData(const std::string& assetsDirectory)
         }
         else
         {
-            sNavmapNamesToPixels[strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png")))] = std::move(navmapPixels);
+            sNavmaps.emplace(std::make_pair(strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png"))), networking::Navmap(std::move(navmapPixels), SERVER_NAVMAP_IMAGE_SIZE)));
         }
     }
     
-    logging::Log(logging::LogType::INFO, "Loaded Navmap data for %lu maps.", sNavmapNamesToPixels.size());
+    logging::Log(logging::LogType::INFO, "Loaded Navmap data for %lu maps.", sNavmaps.size());
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -531,22 +533,7 @@ int main(int argc, char* argv[])
     logging::Log(logging::LogType::INFO, "Asset Directory: %s", argv[1]);
     
     LoadNavmapData(argv[1]);
-    
 
-    // 39,57 black    40,58 white
-//    int blkR = image[(128 * 4) * 57 + 39 * 4 + 0];
-//    int blkG = image[(128 * 4) * 57 + 39 * 4 + 1];
-//    int blkB = image[(128 * 4) * 57 + 39 * 4 + 2];
-//    int blkA = image[(128 * 4) * 57 + 39 * 4 + 3];
-//    
-//    int whtR = image[(128 * 4) * 58 + 40 * 4 + 0];
-//    int whtG = image[(128 * 4) * 58 + 40 * 4 + 1];
-//    int whtB = image[(128 * 4) * 58 + 40 * 4 + 2];
-//    int whtA = image[(128 * 4) * 58 + 40 * 4 + 3];
-//    
-//    logging::Log(logging::LogType::INFO, "Black pixel: %d,%d,%d,%d", blkR, blkG, blkB, blkA);
-//    logging::Log(logging::LogType::INFO, "White pixel: %d,%d,%d,%d", whtR, whtG, whtB, whtA);
-    
     int serverSocket, clientSocket;
     struct sockaddr_in serverAddr, clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
