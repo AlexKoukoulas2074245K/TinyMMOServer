@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <arpa/inet.h>
+#include <fstream>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <mutex>
@@ -27,6 +28,7 @@
 #include "util/Logging.h"
 #include "util/MathUtils.h"
 #include "util/NameGenerator.h"
+#include "util/Pathfinding.h"
 #include "util/StringUtils.h"
 #include "util/lodepng.h"
 
@@ -38,11 +40,12 @@ static constexpr int PORT = 8070;
 static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 8192;
 static constexpr int SERVER_NAVMAP_IMAGE_SIZE = 128;
 
+static const float WORLD_MAP_SCALE = 4.0f;
 static const float SHURIKEN_SPEED = 0.001f;
 static const float SHURIKEN_LIFETIME_SECS = 5.0f;
 static const float ENEMY_RESPAWN_MILLIS = 1000.0f;
 static const float COLLISION_RADIUS = 0.02f;
-static const float CHASING_RADIUS = 0.2f;
+static const float CHASING_RADIUS = 0.4f;
 static const float PLAYER_Z = 0.2f;
 static const float SHURIKEN_Z = 0.19f;
 static const float ENEMY_SPEED = 0.0001f;
@@ -57,8 +60,17 @@ struct ServerWorldObjectData
 
 ///------------------------------------------------------------------------------------------------
 
+struct MapMetaData
+{
+    glm::vec2 mMapDimensions;
+    glm::vec2 mMapPosition;
+};
+
+///------------------------------------------------------------------------------------------------
+
 static std::mutex sWorldMutex;
 static std::vector<ServerWorldObjectData> sWorldObjects;
+static std::unordered_map<strutils::StringId, MapMetaData, strutils::StringIdHasher> sMapMetadata;
 static std::unordered_map<strutils::StringId, networking::Navmap, strutils::StringIdHasher> sNavmaps;
 static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapPixels;
 static std::atomic<long long> sWorldObjectIdCounter = 1;
@@ -159,9 +171,12 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                             math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.x - serverWorldObjectData.mWorldObjectData.objectPosition.x) < CHASING_RADIUS &&
                             math::Abs(otherWorldObjectData->mWorldObjectData.objectPosition.y - serverWorldObjectData.mWorldObjectData.objectPosition.y) < CHASING_RADIUS)
                         {
-                            serverWorldObjectData.mWorldObjectData.parentObjectId = otherWorldObjectData->mWorldObjectData.objectId;
-                            serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_CHASING;
-                            break;
+                            if (pathfinding::DoesObjectHaveLOSToTarget(serverWorldObjectData.mWorldObjectData.objectPosition, otherWorldObjectData->mWorldObjectData.objectPosition, sMapMetadata.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName).mMapPosition, WORLD_MAP_SCALE, ENEMY_SPEED, WORLD_UPDATE_TARGET_INTERVAL_MILLIS, sNavmaps.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName)))
+                            {
+                                serverWorldObjectData.mWorldObjectData.parentObjectId = otherWorldObjectData->mWorldObjectData.objectId;
+                                serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_CHASING;
+                                break;
+                            }
                         }
                     }
                 }
@@ -208,7 +223,7 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                 }
                 
                 serverWorldObjectData.mWorldObjectData.objectPosition += serverWorldObjectData.mWorldObjectData.objectVelocity * WORLD_UPDATE_TARGET_INTERVAL_MILLIS;
-                
+             
                 // Shuriken collision
                 for (auto* otherWorldObjectData: shurikenObjects)
                 {
@@ -488,6 +503,33 @@ void HandleClient(int clientSocket)
 
 ///------------------------------------------------------------------------------------------------
 
+void LoadMapMetaData(const std::string& assetsDirectory)
+{
+    std::ifstream dataFile(assetsDirectory + "/data/map_global_data.json");
+    if (dataFile.is_open())
+    {
+        std::stringstream buffer;
+        buffer << dataFile.rdbuf();
+        
+        auto globalMapDataJson = nlohmann::json::parse(buffer.str());
+        
+        for (auto mapTransformIter = globalMapDataJson["map_transforms"].begin(); mapTransformIter != globalMapDataJson["map_transforms"].end(); ++mapTransformIter)
+        {
+            auto mapFileName = mapTransformIter.key();
+            auto mapName = mapTransformIter.key().substr(0, mapFileName.find(".json"));
+            auto mapNameId = strutils::StringId(mapName);
+            auto mapPosition = glm::vec2(mapTransformIter.value()["x"].get<float>(), mapTransformIter.value()["y"].get<float>());
+            auto mapDimensions = glm::vec2(mapTransformIter.value()["width"].get<float>(), mapTransformIter.value()["height"].get<float>());
+            
+            sMapMetadata.emplace(std::make_pair(mapNameId, MapMetaData{ mapDimensions, mapPosition }));
+        }
+    }
+    
+    logging::Log(logging::LogType::INFO, "Loaded MapMetaData for %lu maps.", sMapMetadata.size());
+}
+
+///------------------------------------------------------------------------------------------------
+
 void LoadNavmapData(const std::string& assetsDirectory)
 {
     auto navmapFilePaths = fileutils::GetAllFilenamesAndFolderNamesInDirectory(assetsDirectory + "/navmaps/");
@@ -536,11 +578,9 @@ int main(int argc, char* argv[])
     logging::Log(logging::LogType::INFO, "Initializing server from CWD: %s", argv[0]);
     logging::Log(logging::LogType::INFO, "Asset Directory: %s", argv[1]);
     
+    LoadMapMetaData(argv[1]);
     LoadNavmapData(argv[1]);
-
-    logging::Log(logging::LogType::INFO, "Navmap Tile Type at 39,57 : %d", static_cast<int>(sNavmaps.at(strutils::StringId("entry_map")).GetNavmapTileAt(39, 57)));
-    logging::Log(logging::LogType::INFO, "Navmap Tile Type at 40,58 : %d", static_cast<int>(sNavmaps.at(strutils::StringId("entry_map")).GetNavmapTileAt(40, 58)));
-
+    
     int serverSocket, clientSocket;
     struct sockaddr_in serverAddr, clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
