@@ -60,6 +60,7 @@ struct ServerWorldObjectData
 static std::mutex sWorldMutex;
 static std::vector<ServerWorldObjectData> sWorldObjects;
 static std::unordered_map<strutils::StringId, networking::Navmap, strutils::StringIdHasher> sNavmaps;
+static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapPixels;
 static std::atomic<long long> sWorldObjectIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
@@ -512,7 +513,10 @@ void LoadNavmapData(const std::string& assetsDirectory)
         }
         else
         {
-            sNavmaps.emplace(std::make_pair(strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png"))), networking::Navmap(std::move(navmapPixels), SERVER_NAVMAP_IMAGE_SIZE)));
+            auto mapName = strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png")));
+            
+            sNavmapPixels.emplace(std::make_pair(mapName, navmapPixels));
+            sNavmaps.emplace(std::make_pair(mapName, networking::Navmap(sNavmapPixels.at(mapName).data(), SERVER_NAVMAP_IMAGE_SIZE)));
         }
     }
     
@@ -533,6 +537,9 @@ int main(int argc, char* argv[])
     logging::Log(logging::LogType::INFO, "Asset Directory: %s", argv[1]);
     
     LoadNavmapData(argv[1]);
+
+    logging::Log(logging::LogType::INFO, "Navmap Tile Type at 39,57 : %d", static_cast<int>(sNavmaps.at(strutils::StringId("entry_map")).GetNavmapTileAt(39, 57)));
+    logging::Log(logging::LogType::INFO, "Navmap Tile Type at 40,58 : %d", static_cast<int>(sNavmaps.at(strutils::StringId("entry_map")).GetNavmapTileAt(40, 58)));
 
     int serverSocket, clientSocket;
     struct sockaddr_in serverAddr, clientAddr;
