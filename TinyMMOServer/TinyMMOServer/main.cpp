@@ -73,6 +73,7 @@ static std::vector<ServerWorldObjectData> sWorldObjects;
 static std::unordered_map<strutils::StringId, MapMetaData, strutils::StringIdHasher> sMapMetadata;
 static std::unordered_map<strutils::StringId, networking::Navmap, strutils::StringIdHasher> sNavmaps;
 static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapPixels;
+static std::unordered_map<long long, std::list<glm::vec3>> sPaths;
 static std::atomic<long long> sWorldObjectIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
@@ -193,8 +194,29 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                         }
                         else
                         {
-                            serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(playerObjectData.objectPosition - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
-                            serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                            if (pathfinding::DoesObjectHaveLOSToTarget(serverWorldObjectData.mWorldObjectData.objectPosition, playerObjectData.objectPosition, sMapMetadata.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName).mMapPosition, WORLD_MAP_SCALE, ENEMY_SPEED, WORLD_UPDATE_TARGET_INTERVAL_MILLIS, sNavmaps.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName)))
+                            {
+                                serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(playerObjectData.objectPosition - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
+                                serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                            }
+                            else
+                            {
+                                auto path = pathfinding::CalculateAStarPathToTarget(serverWorldObjectData.mWorldObjectData.objectPosition, playerObjectData.objectPosition, sMapMetadata.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName).mMapPosition, WORLD_MAP_SCALE, sNavmaps.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName));
+                                if (path.size() > 2)
+                                {
+                                    path.pop_front();
+                                    
+                                    serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(path.front() - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
+                                    serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                                    
+                                    if (glm::distance(path.front(), serverWorldObjectData.mWorldObjectData.objectPosition) < 0.001f)
+                                    {
+                                        path.pop_front();
+                                        serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(path.front() - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
+                                        serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                                    }
+                                }
+                            }
                         }
                     }
                     else
