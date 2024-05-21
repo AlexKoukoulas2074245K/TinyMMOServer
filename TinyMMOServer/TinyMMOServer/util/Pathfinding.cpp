@@ -9,6 +9,7 @@
 #include "Logging.h"
 
 #include <algorithm>
+#include <chrono>
 #include <queue>
 #include <unordered_set>
 #include <utility>
@@ -18,6 +19,10 @@
 
 namespace pathfinding
 {
+
+///-----------------------------------------------------------------------------------------------
+
+static const float TILE_SIZE = 0.0625f;
 
 ///-----------------------------------------------------------------------------------------------
 
@@ -35,10 +40,9 @@ bool DoesObjectHaveLOSToTarget(const glm::vec3& sourceObjectPosition, const glm:
     // We ray cast and move half the object's speed till we reach the target
     auto normalizedDirectionToTarget = glm::normalize(directionToTarget);
     auto tIncrements = (sourceObjectSpeed * dtMillis)/2.0f;
-    auto increments10Percent = static_cast<int>(0.1f * distanceToTarget/tIncrements);
     auto numTIncrements = static_cast<int>(distanceToTarget/tIncrements);
     
-    for (auto i = increments10Percent; i < numTIncrements - increments10Percent; ++i)
+    for (auto i = 0; i < numTIncrements; ++i)
     {
         auto testPosition = sourceObjectPosition + normalizedDirectionToTarget * static_cast<float>(i) * tIncrements;
         auto tileAtTestPosition = navmap.GetNavmapTileAt(navmap.GetNavmapCoord(testPosition, mapPosition, mapScale));
@@ -109,6 +113,8 @@ std::list<glm::vec3> CalculateAStarPathToTarget(const glm::vec3& sourceObjectPos
     const auto& startCoord = navmap.GetNavmapCoord(sourceObjectPosition, mapPosition, mapScale);
     const auto& endCoord = navmap.GetNavmapCoord(targetObjectPosition, mapPosition, mapScale);
     
+    auto beginTp = std::chrono::high_resolution_clock::now();
+    
     sOpenSet = {};
     sNodes.clear();
     closedSet = {};
@@ -154,13 +160,13 @@ std::list<glm::vec3> CalculateAStarPathToTarget(const glm::vec3& sourceObjectPos
             Node* node = current;
             while (node != nullptr) 
             {
-                path.push_front(navmap.GetMapPositionFromNavmapCoord(glm::ivec2(node->col, node->row), mapPosition, mapScale, sourceObjectPosition.z));
+                path.push_front(navmap.GetMapPositionFromNavmapCoord(glm::ivec2(node->col, node->row), mapPosition, mapScale, sourceObjectPosition.z) + glm::vec3(TILE_SIZE/4.0f, -TILE_SIZE/4.0f, 0.0f));
                 node = node->parent;
             }
             break;
         }
 
-        static const int directions[8][2] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1} };
+        static const int directions[4][2] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0} }; //, {1, 1}, {-1, 1}, {1, -1}, {-1, -1} };
         for (const auto& dir : directions) {
             int newRow = current->row + dir[0];
             int newCol = current->col + dir[1];
@@ -172,7 +178,15 @@ std::list<glm::vec3> CalculateAStarPathToTarget(const glm::vec3& sourceObjectPos
             }
         }
     }
-
+    
+    auto endTp = std::chrono::high_resolution_clock::now();
+    auto micros = std::chrono::duration_cast<std::chrono::microseconds>(endTp - beginTp).count();
+    
+    if (micros > 10000)
+    {
+        logging::Log(logging::LogType::INFO, "Excessive Pathfinding took %d millis", micros);
+    }
+    
     return path;
 }
 

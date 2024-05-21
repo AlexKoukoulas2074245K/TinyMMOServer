@@ -75,6 +75,7 @@ static std::unordered_map<strutils::StringId, networking::Navmap, strutils::Stri
 static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapPixels;
 static std::unordered_map<long long, std::list<glm::vec3>> sPaths;
 static std::atomic<long long> sWorldObjectIdCounter = 1;
+static std::atomic<bool> sPathfindingDebugEnabled = false;
 
 ///------------------------------------------------------------------------------------------------
 
@@ -91,23 +92,24 @@ void EnemyRespawnCheck()
         auto playerCount = std::count_if(sWorldObjects.begin(), sWorldObjects.end(), [](const ServerWorldObjectData& serverObjectData){ return serverObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_PLAYER; });
         auto enemyCount = std::count_if(sWorldObjects.begin(), sWorldObjects.end(), [](const ServerWorldObjectData& serverObjectData){ return serverObjectData.mWorldObjectData.objectType == networking::OBJ_TYPE_NPC_ENEMY; });
         
-        if (enemyCount >= playerCount)
-        {
-            return;
-        }
         
         for (auto i = 0; i < playerCount; ++i)
         {
-            ServerWorldObjectData placeHolderData = {};
-            placeHolderData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
-            placeHolderData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.3f, 0.45f), math::RandomFloat(0.11f, 0.19f));
-            placeHolderData.mWorldObjectData.objectCampPosition = placeHolderData.mWorldObjectData.objectPosition;
-            placeHolderData.mWorldObjectData.objectCurrentMapName = strutils::StringId("map_tower");
-            placeHolderData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
-            placeHolderData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
-            placeHolderData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
+            if (enemyCount >= playerCount)
+            {
+                return;
+            }
             
-            sWorldObjects.push_back(placeHolderData);
+            ServerWorldObjectData enemyData = {};
+            enemyData.mWorldObjectData.objectId = sWorldObjectIdCounter++;
+            enemyData.mWorldObjectData.objectPosition = glm::vec3(math::RandomFloat(-0.7f, -0.3f), math::RandomFloat(0.5f, 0.65f), math::RandomFloat(0.11f, 0.19f));
+            enemyData.mWorldObjectData.objectCampPosition = enemyData.mWorldObjectData.objectPosition;
+            enemyData.mWorldObjectData.objectCurrentMapName = strutils::StringId("map_tower");
+            enemyData.mWorldObjectData.objectType = networking::OBJ_TYPE_NPC_ENEMY;
+            enemyData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
+            enemyData.mLastHeartbeatTimePoint = std::chrono::high_resolution_clock::now();
+            
+            sWorldObjects.push_back(enemyData);
         }
     }
     
@@ -187,6 +189,11 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                     auto playerObjectDataIter = std::find_if(playerObjects.begin(), playerObjects.end(), [&](const ServerWorldObjectData* playerObjectData){ return playerObjectData->mWorldObjectData.objectId == serverWorldObjectData.mWorldObjectData.parentObjectId; });
                     if (playerObjectDataIter != playerObjects.end() && (*playerObjectDataIter)->mWorldObjectData.objectState == networking::OBJ_STATE_ALIVE)
                     {
+                        if (sPathfindingDebugEnabled)
+                        {
+                            serverWorldObjectData.mWorldObjectData.objectName = strutils::StringId();
+                        }
+                        
                         auto& playerObjectData = (*playerObjectDataIter)->mWorldObjectData;
                         if (playerObjectData.objectCurrentMapName != serverWorldObjectData.mWorldObjectData.objectCurrentMapName)
                         {
@@ -202,12 +209,22 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                             else
                             {
                                 auto path = pathfinding::CalculateAStarPathToTarget(serverWorldObjectData.mWorldObjectData.objectPosition, playerObjectData.objectPosition, sMapMetadata.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName).mMapPosition, WORLD_MAP_SCALE, sNavmaps.at(serverWorldObjectData.mWorldObjectData.objectCurrentMapName));
-                                if (path.size() > 2)
+                                if (path.size() > 0)
                                 {
                                     path.pop_front();
                                     
                                     serverWorldObjectData.mWorldObjectData.objectVelocity = glm::normalize(path.front() - serverWorldObjectData.mWorldObjectData.objectPosition) * ENEMY_SPEED;
                                     serverWorldObjectData.mWorldObjectData.objectVelocity.z = 0.0f;
+                                    
+                                    if (sPathfindingDebugEnabled)
+                                    {
+                                        auto pathString = std::string();
+                                        for (const auto& nextPos: path)
+                                        {
+                                            pathString += std::to_string(nextPos.x) + "," + std::to_string(nextPos.y) + "," + std::to_string(nextPos.z) + " ";
+                                        }
+                                        serverWorldObjectData.mWorldObjectData.objectName = strutils::StringId(pathString);
+                                    }
                                     
                                     if (glm::distance(path.front(), serverWorldObjectData.mWorldObjectData.objectPosition) < 0.001f)
                                     {
@@ -222,7 +239,7 @@ void UpdateWorldObjects(std::chrono::high_resolution_clock::time_point now)
                     else
                     {
                         serverWorldObjectData.mWorldObjectData.objectVelocity = {};
-                        serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_ALIVE;
+                        serverWorldObjectData.mWorldObjectData.objectState = networking::OBJ_STATE_RETREATING;
                     }
                 }
                 // Retreating to camp
@@ -463,6 +480,15 @@ void OnClientThrowRangedWeaponMessage(const nlohmann::json& json, const int clie
 
 ///------------------------------------------------------------------------------------------------
 
+void OnClientSetPathfindingDebugModeMessage(const nlohmann::json& json, const int clientSocket)
+{
+    networking::SetPathfindingDebugModeRequest setPathfindingDebugModeRequest = {};
+    setPathfindingDebugModeRequest.DeserializeFromJson(json);
+    sPathfindingDebugEnabled = setPathfindingDebugModeRequest.enabled;
+}
+
+///------------------------------------------------------------------------------------------------
+
 void HandleClient(int clientSocket)
 {
     std::string jsonMessage;
@@ -512,6 +538,10 @@ void HandleClient(int clientSocket)
             else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_THROW_RANGED_WEAPON))
             {
                 OnClientThrowRangedWeaponMessage(receivedJson, clientSocket);
+            }
+            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_SET_PATHFINDING_DEBUG_MODE))
+            {
+                OnClientSetPathfindingDebugModeMessage(receivedJson, clientSocket);
             }
         }
         catch (const std::exception& e)
