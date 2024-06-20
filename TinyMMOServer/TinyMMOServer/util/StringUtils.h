@@ -164,7 +164,7 @@ inline std::string VecToString(const std::vector<T>& vec)
     ss << "[";
     for(size_t i = 0; i <vec.size(); ++i)
     {
-        ss << vec[i]; // <- no template param list
+        ss << '"' << vec[i] << '"'; // <- no template param list
         if(i != vec.size() - 1)
             ss<<", ";
     }
