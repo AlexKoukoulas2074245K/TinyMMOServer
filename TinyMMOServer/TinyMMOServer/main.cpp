@@ -116,6 +116,16 @@ void OnClientWordRequestMessage(const nlohmann::json& json, const int clientSock
 
 ///------------------------------------------------------------------------------------------------
 
+void OnClientGetSupportedLanguagesRequestMessage(const nlohmann::json& json, const int clientSocket)
+{
+    networking::GetSupportedLanguagesResponse response = {};
+    response.supportedLanguages = sDictionarySupportedLanguages;
+    auto responseJson = response.SerializeToJson();
+    SendMessageToClient(responseJson, networking::MessageType::SC_GET_SUPPORTED_LANGUAGES_RESPONSE, clientSocket);
+}
+
+///------------------------------------------------------------------------------------------------
+
 void HandleClient(int clientSocket)
 {
     std::string jsonMessage;
@@ -161,6 +171,10 @@ void HandleClient(int clientSocket)
             else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_WORD_REQUEST))
             {
                 OnClientWordRequestMessage(receivedJson, clientSocket);
+            }
+            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_GET_SUPPORTED_LANGUAGES_REQUEST))
+            {
+                OnClientGetSupportedLanguagesRequestMessage(receivedJson, clientSocket);
             }
         }
         catch (const std::exception& e)
