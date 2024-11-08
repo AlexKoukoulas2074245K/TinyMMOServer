@@ -53,12 +53,6 @@
             ReferencedContainer = "container:TinyMMOServer.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <CommandLineArguments>
-         <CommandLineArgument
-            argument = "/Users/Code/TinyMMOServer/TinyMMOServer/TinyMMOServer/source_net_common/net_assets"
-            isEnabled = "YES">
-         </CommandLineArgument>
-      </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

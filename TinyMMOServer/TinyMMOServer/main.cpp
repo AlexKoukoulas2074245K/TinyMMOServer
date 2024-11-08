@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "net_common/Card.h"
 #include "net_common/NetworkMessages.h"
 #include "net_common/SerializableNetworkObjects.h"
 #include "util/Date.h"
@@ -25,24 +26,76 @@
 #include "util/Json.h"
 #include "util/Logging.h"
 #include "util/MathUtils.h"
-#include "util/NameGenerator.h"
 #include "util/StringUtils.h"
-#include "util/lodepng.h"
 
 ///------------------------------------------------------------------------------------------------
 
-using WorldTranslationsType = std::unordered_map<std::string, std::string>;
+struct InternalTableState
+{
+    enum class RoundState
+    {
+        DEALING_HOLE_CARDS,
+        PLACING_BLINDS
+    };
+    
+    std::vector<std::pair<long long, std::vector<poker::Card>>> mPlayerHoleCards;
+    std::vector<poker::Card> mCommunityCards;
+    std::vector<poker::Card> mDeck;
+    RoundState mRoundState;
+};
+
+///------------------------------------------------------------------------------------------------
 
 static constexpr int PORT = 8070;
 static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 8192;
-static std::atomic<long long> sWorldObjectIdCounter = 1;
-static std::vector<std::string> sDictionarySupportedLanguages;
-static std::vector<WorldTranslationsType> sDictionaryWordTranslations;
+static std::atomic<long long> sPlayerIdCounter = 1;
+static std::atomic<long long> sTableIdCounter = 1;
+static std::mutex sGlobalTableMutex;
+static std::unordered_map<long long, InternalTableState> sTableStates;
 
 ///------------------------------------------------------------------------------------------------
 
-void UpdateLoop()
+std::vector<poker::Card> CreateShuffledDeck()
 {
+    std::vector<poker::Card> deck;
+    
+    for (const auto& suit: { poker::CardSuit::SPADE, poker::CardSuit::HEART, poker::CardSuit::DIAMOND, poker::CardSuit::CLUB})
+    {
+        for (auto i = static_cast<int>(poker::CardRank::TWO); i < static_cast<int>(poker::CardRank::ACE); ++i)
+        {
+            deck.push_back(poker::Card(static_cast<poker::CardRank>(i), suit));
+        }
+    }
+    
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::shuffle(deck.begin(), deck.end(), g);
+    return deck;
+}
+
+///------------------------------------------------------------------------------------------------
+
+void UpdateTableLoop()
+{
+    while (true)
+    {
+        std::lock_guard<std::mutex> globalTableLock(sGlobalTableMutex);
+        for (auto& tableStateEntry: sTableStates)
+        {
+            if (tableStateEntry.second.mRoundState == InternalTableState::RoundState::DEALING_HOLE_CARDS)
+            {
+                for (auto& playerEntry: tableStateEntry.second.mPlayerHoleCards)
+                {
+                    playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
+                    tableStateEntry.second.mDeck.pop_back();
+                    playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
+                    tableStateEntry.second.mDeck.pop_back();
+                }
+                
+                tableStateEntry.second.mRoundState = InternalTableState::RoundState::PLACING_BLINDS;
+            }
+        }
+    }
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -62,66 +115,74 @@ void SendMessageToClient(nlohmann::json& messageJson, networking::MessageType me
 
 ///------------------------------------------------------------------------------------------------
 
-void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSocket)
+void OnClientPlayRequestMessage(const nlohmann::json& json, const int clientSocket)
 {
-    networking::LoginResponse loginResponse = {};
-    loginResponse.playerId = sWorldObjectIdCounter++;
-    loginResponse.allowed = true;
-    loginResponse.playerName = strutils::StringId(GenerateName());
+    networking::PlayResponse playResponse = {};
+    playResponse.allowed = true;
+    playResponse.playerId = sPlayerIdCounter;
+    playResponse.tableId = sTableIdCounter;
+    
+    {
+        std::lock_guard<std::mutex> globalTableStateLock(sGlobalTableMutex);
 
-    auto loginResponseJson = loginResponse.SerializeToJson();
-    SendMessageToClient(loginResponseJson, networking::MessageType::SC_LOGIN_RESPONSE, clientSocket);
+        sTableStates[sTableIdCounter].mDeck = CreateShuffledDeck();
+        
+        sTableStates[sTableIdCounter].mPlayerHoleCards.push_back(std::make_pair(sPlayerIdCounter++, std::vector<poker::Card>()));
+        sTableStates[sTableIdCounter].mPlayerHoleCards.push_back(std::make_pair(sPlayerIdCounter++, std::vector<poker::Card>())); // Bot
+
+        sTableStates[sTableIdCounter].mRoundState = InternalTableState::RoundState::DEALING_HOLE_CARDS;
+        sTableIdCounter++;
+    }
+    
+    auto playResponseJson = playResponse.SerializeToJson();
+    SendMessageToClient(playResponseJson, networking::MessageType::SC_PLAY_RESPONSE, clientSocket);
 }
 
 ///------------------------------------------------------------------------------------------------
 
-void OnClientWordRequestMessage(const nlohmann::json& json, const int clientSocket)
+void OnClientTableStateRequestMessage(const nlohmann::json& json, const int clientSocket)
 {
-    networking::WordRequest wordRequest = {};
-    wordRequest.DeserializeFromJson(json);
+    networking::TableStateRequest tableStateRequest = {};
+    tableStateRequest.DeserializeFromJson(json);
     
-    networking::WordResponse wordResponse = {};
-    if (std::find(sDictionarySupportedLanguages.cbegin(), sDictionarySupportedLanguages.cend(), wordRequest.sourceLanguge) != sDictionarySupportedLanguages.cend() &&
-        std::find(sDictionarySupportedLanguages.cbegin(), sDictionarySupportedLanguages.cend(), wordRequest.targetLanguage) != sDictionarySupportedLanguages.cend())
+    networking::TableStateResponse tableStateResponse = {};
+    
     {
-        wordResponse.allowed = true;
-        
-        auto wordFamilyIndex = math::RandomInt(0, static_cast<int>(sDictionaryWordTranslations.size())/4 - 1);
-        auto sourceWordIndexOffset = math::RandomInt(0, 3);
-        
-        const auto& wordTranslations = sDictionaryWordTranslations.at(wordFamilyIndex * 4 + sourceWordIndexOffset);
-        wordResponse.sourceWord = wordTranslations.at(wordRequest.sourceLanguge);
-        wordResponse.choices.push_back(wordTranslations.at(wordRequest.targetLanguage));
-        
-        for (auto i = 0; i < 4; ++i)
+        std::lock_guard<std::mutex> globalTableStateLock(sGlobalTableMutex);
+        auto tableIter = sTableStates.find(tableStateRequest.tableId);
+        if (tableIter != sTableStates.end())
         {
-            if (i != sourceWordIndexOffset)
+            const auto& table = tableIter->second;
+            
+            for (const auto& communityCard: table.mCommunityCards)
             {
-                wordResponse.choices.push_back(sDictionaryWordTranslations.at(wordFamilyIndex * 4 + i).at(wordRequest.targetLanguage));
+                tableStateResponse.communityCards += communityCard.ToString();
+            }
+            
+            for (const auto& playerEntry: table.mPlayerHoleCards)
+            {
+                tableStateResponse.holeCardPlayerIds.push_back(playerEntry.first);
+                
+                if (playerEntry.first == tableStateRequest.playerId)
+                {
+                    tableStateResponse.holeCards.push_back(playerEntry.second[0].ToString() + "," + playerEntry.second[1].ToString());
+                }
+                else
+                {
+                    tableStateResponse.holeCards.push_back("0,0"); // All foreign hole cards are unknown
+                }
+            }
+            
+            switch (table.mRoundState)
+            {
+                case InternalTableState::RoundState::DEALING_HOLE_CARDS: tableStateResponse.roundStateName = "DEALING_HOLE_CARDS"; break;
+                case InternalTableState::RoundState::PLACING_BLINDS: tableStateResponse.roundStateName = "DEALING_HOLE_CARDS"; break;
             }
         }
-        
-        std::random_device rd;
-        std::mt19937 g(rd());
-        std::shuffle(wordResponse.choices.begin(), wordResponse.choices.end(), g);
     }
-    else
-    {
-        wordResponse.allowed = false;
-    }
-    auto wordResponseJson = wordResponse.SerializeToJson();
-    SendMessageToClient(wordResponseJson, networking::MessageType::SC_WORD_RESPONSE, clientSocket);
-}
-
-
-///------------------------------------------------------------------------------------------------
-
-void OnClientGetSupportedLanguagesRequestMessage(const nlohmann::json& json, const int clientSocket)
-{
-    networking::GetSupportedLanguagesResponse response = {};
-    response.supportedLanguages = sDictionarySupportedLanguages;
-    auto responseJson = response.SerializeToJson();
-    SendMessageToClient(responseJson, networking::MessageType::SC_GET_SUPPORTED_LANGUAGES_RESPONSE, clientSocket);
+    
+    auto tableStateResponseJson = tableStateResponse.SerializeToJson();
+    SendMessageToClient(tableStateResponseJson, networking::MessageType::SC_TABLE_STATE_RESPONSE, clientSocket);
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -164,17 +225,13 @@ void HandleClient(int clientSocket)
         {
             nlohmann::json receivedJson = nlohmann::json::parse(jsonMessage);
             
-            if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_LOGIN_REQUEST))
+            if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_PLAY_REQUEST))
             {
-                OnClientLoginRequestMessage(receivedJson, clientSocket);
+                OnClientPlayRequestMessage(receivedJson, clientSocket);
             }
-            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_WORD_REQUEST))
+            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_TABLE_STATE_REQUEST))
             {
-                OnClientWordRequestMessage(receivedJson, clientSocket);
-            }
-            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_GET_SUPPORTED_LANGUAGES_REQUEST))
-            {
-                OnClientGetSupportedLanguagesRequestMessage(receivedJson, clientSocket);
+                OnClientTableStateRequestMessage(receivedJson, clientSocket);
             }
         }
         catch (const std::exception& e)
@@ -188,53 +245,9 @@ void HandleClient(int clientSocket)
 
 ///------------------------------------------------------------------------------------------------
 
-void LoadWordsDictionary(const std::string& assetsDirectory)
-{
-    std::ifstream dataFile(assetsDirectory + "/data/words.csv");
-    
-    sDictionarySupportedLanguages.clear();
-    sDictionaryWordTranslations.clear();
-    
-    if (dataFile.is_open())
-    {
-        std::string csvLine;
-        std::getline(dataFile, csvLine);
-        
-        // Load supported languages
-        sDictionarySupportedLanguages = strutils::StringSplit(csvLine, ',');
-        
-        // Load word translations
-        while (std::getline(dataFile, csvLine))
-        {
-            auto words = strutils::StringSplit(csvLine, ',');
-            assert(words.size() == sDictionarySupportedLanguages.size());
-            
-            WorldTranslationsType translations;
-            for (auto i = 0; i < words.size(); ++i)
-            {
-                translations[sDictionarySupportedLanguages[i]] = words[i];
-            }
-            sDictionaryWordTranslations.push_back(translations);
-        }
-    }
-    
-    logging::Log(logging::LogType::INFO, "Loaded Word data for %lu entries.", sDictionaryWordTranslations.size());
-}
-
-///------------------------------------------------------------------------------------------------
-
 int main(int argc, char* argv[])
 {
-    if (argc < 2)
-    {
-        logging::Log(logging::LogType::INFO, "Asset Directory not provided");
-        exit(EXIT_FAILURE);
-    }
-    
     logging::Log(logging::LogType::INFO, "Initializing server from CWD: %s", argv[0]);
-    logging::Log(logging::LogType::INFO, "Asset Directory: %s", argv[1]);
-    
-    LoadWordsDictionary(argv[1]);
     
     int serverSocket, clientSocket;
     struct sockaddr_in serverAddr, clientAddr;
@@ -267,8 +280,8 @@ int main(int argc, char* argv[])
     
     logging::Log(logging::LogType::INFO, "Listening for connections on port: %d", PORT);
     
-    // World Update Loop
-    std::thread(UpdateLoop).detach();
+    // Table Update Loop
+    std::thread(UpdateTableLoop).detach();
     
     // Accept and handle incoming connections
     while (true)
