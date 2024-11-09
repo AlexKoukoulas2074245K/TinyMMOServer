@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <arpa/inet.h>
+#include <chrono>
 #include <fstream>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -34,14 +35,22 @@ struct InternalTableState
 {
     enum class RoundState
     {
+        PLACING_BLINDS,
         DEALING_HOLE_CARDS,
-        PLACING_BLINDS
+        WAITING_FOR_ACTIONS_PREFLOP,
+        DEALING_FLOP,
+        WAITING_FOR_ACTIONS_POSTFLOP,
+        DEALING_TURN,
+        WAITING_FOR_ACTIONS_POSTTURN,
+        DEALING_RIVER,
+        WAITING_FOR_ACTIONS_POSTRIVER,
     };
     
     std::vector<std::pair<long long, std::vector<poker::Card>>> mPlayerHoleCards;
     std::vector<poker::Card> mCommunityCards;
     std::vector<poker::Card> mDeck;
     RoundState mRoundState;
+    std::chrono::time_point<std::chrono::high_resolution_clock> mTableTimer;
 };
 
 ///------------------------------------------------------------------------------------------------
@@ -82,17 +91,85 @@ void UpdateTableLoop()
         std::lock_guard<std::mutex> globalTableLock(sGlobalTableMutex);
         for (auto& tableStateEntry: sTableStates)
         {
-            if (tableStateEntry.second.mRoundState == InternalTableState::RoundState::DEALING_HOLE_CARDS)
+            switch (tableStateEntry.second.mRoundState)
             {
-                for (auto& playerEntry: tableStateEntry.second.mPlayerHoleCards)
+                case InternalTableState::RoundState::PLACING_BLINDS:
                 {
-                    playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
-                    tableStateEntry.second.mDeck.pop_back();
-                    playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
-                    tableStateEntry.second.mDeck.pop_back();
-                }
+                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_HOLE_CARDS;
+                } break;
+                    
+                case InternalTableState::RoundState::DEALING_HOLE_CARDS:
+                {
+                    for (auto& playerEntry: tableStateEntry.second.mPlayerHoleCards)
+                    {
+                        playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
+                        tableStateEntry.second.mDeck.pop_back();
+                        playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
+                        tableStateEntry.second.mDeck.pop_back();
+                    }
+                    
+                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_PREFLOP;
+                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
+                } break;
+                    
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_PREFLOP:
+                {
+                    auto secondsDelta = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - tableStateEntry.second.mTableTimer).count();
+                    if (secondsDelta > 5)
+                    {
+                        tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_FLOP;
+                    }
+                } break;
+                    
+                case InternalTableState::RoundState::DEALING_FLOP:
+                {
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        tableStateEntry.second.mCommunityCards.push_back(tableStateEntry.second.mDeck.back());
+                        tableStateEntry.second.mDeck.pop_back();
+                    }
+                    
+                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
+                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTFLOP;
+                } break;
                 
-                tableStateEntry.second.mRoundState = InternalTableState::RoundState::PLACING_BLINDS;
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTFLOP:
+                {
+                    auto secondsDelta = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - tableStateEntry.second.mTableTimer).count();
+                    if (secondsDelta > 2)
+                    {
+                        tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_TURN;
+                    }
+                } break;
+                    
+                case InternalTableState::RoundState::DEALING_TURN:
+                {
+                    tableStateEntry.second.mCommunityCards.push_back(tableStateEntry.second.mDeck.back());
+                    tableStateEntry.second.mDeck.pop_back();
+                    
+                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
+                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTTURN;
+                } break;
+                    
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTTURN:
+                {
+                    auto secondsDelta = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - tableStateEntry.second.mTableTimer).count();
+                    if (secondsDelta > 3)
+                    {
+                        tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_RIVER;
+                    }
+                } break;
+                    
+                case InternalTableState::RoundState::DEALING_RIVER:
+                {
+                    tableStateEntry.second.mCommunityCards.push_back(tableStateEntry.second.mDeck.back());
+                    tableStateEntry.second.mDeck.pop_back();
+                    
+                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
+                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTRIVER;
+                } break;
+                    
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTRIVER: break;
             }
         }
     }
@@ -130,7 +207,7 @@ void OnClientPlayRequestMessage(const nlohmann::json& json, const int clientSock
         sTableStates[sTableIdCounter].mPlayerHoleCards.push_back(std::make_pair(sPlayerIdCounter++, std::vector<poker::Card>()));
         sTableStates[sTableIdCounter].mPlayerHoleCards.push_back(std::make_pair(sPlayerIdCounter++, std::vector<poker::Card>())); // Bot
 
-        sTableStates[sTableIdCounter].mRoundState = InternalTableState::RoundState::DEALING_HOLE_CARDS;
+        sTableStates[sTableIdCounter].mRoundState = InternalTableState::RoundState::PLACING_BLINDS;
         sTableIdCounter++;
     }
     
@@ -154,9 +231,13 @@ void OnClientTableStateRequestMessage(const nlohmann::json& json, const int clie
         {
             const auto& table = tableIter->second;
             
-            for (const auto& communityCard: table.mCommunityCards)
+            for (int i = 0; i < table.mCommunityCards.size(); ++i)
             {
-                tableStateResponse.communityCards += communityCard.ToString();
+                tableStateResponse.communityCards += table.mCommunityCards[i].ToString();
+                if (i != table.mCommunityCards.size() - 1)
+                {
+                    tableStateResponse.communityCards += ",";
+                }
             }
             
             for (const auto& playerEntry: table.mPlayerHoleCards)
@@ -175,8 +256,15 @@ void OnClientTableStateRequestMessage(const nlohmann::json& json, const int clie
             
             switch (table.mRoundState)
             {
+                case InternalTableState::RoundState::PLACING_BLINDS: tableStateResponse.roundStateName = "PLACING_BLINDS"; break;
                 case InternalTableState::RoundState::DEALING_HOLE_CARDS: tableStateResponse.roundStateName = "DEALING_HOLE_CARDS"; break;
-                case InternalTableState::RoundState::PLACING_BLINDS: tableStateResponse.roundStateName = "DEALING_HOLE_CARDS"; break;
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_PREFLOP: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_PREFLOP"; break;
+                case InternalTableState::RoundState::DEALING_FLOP: tableStateResponse.roundStateName = "DEALING_FLOP"; break;
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTFLOP: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_POSTFLOP"; break;
+                case InternalTableState::RoundState::DEALING_TURN: tableStateResponse.roundStateName = "DEALING_TURN"; break;
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTTURN: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_POSTTURN"; break;
+                case InternalTableState::RoundState::DEALING_RIVER: tableStateResponse.roundStateName = "DEALING_RIVER"; break;
+                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTRIVER: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_POSTRIVER"; break;
             }
         }
     }
