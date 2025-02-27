@@ -19,7 +19,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "net_common/Card.h"
 #include "net_common/NetworkMessages.h"
 #include "net_common/SerializableNetworkObjects.h"
 #include "util/Date.h"
@@ -31,56 +30,9 @@
 
 ///------------------------------------------------------------------------------------------------
 
-struct InternalTableState
-{
-    enum class RoundState
-    {
-        PLACING_BLINDS,
-        DEALING_HOLE_CARDS,
-        WAITING_FOR_ACTIONS_PREFLOP,
-        DEALING_FLOP,
-        WAITING_FOR_ACTIONS_POSTFLOP,
-        DEALING_TURN,
-        WAITING_FOR_ACTIONS_POSTTURN,
-        DEALING_RIVER,
-        WAITING_FOR_ACTIONS_POSTRIVER,
-    };
-    
-    std::vector<std::pair<long long, std::vector<poker::Card>>> mPlayerHoleCards;
-    std::vector<poker::Card> mCommunityCards;
-    std::vector<poker::Card> mDeck;
-    RoundState mRoundState;
-    std::chrono::time_point<std::chrono::high_resolution_clock> mTableTimer;
-};
-
-///------------------------------------------------------------------------------------------------
-
 static constexpr int PORT = 8070;
 static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 8192;
 static std::atomic<long long> sPlayerIdCounter = 1;
-static std::atomic<long long> sTableIdCounter = 1;
-static std::mutex sGlobalTableMutex;
-static std::unordered_map<long long, InternalTableState> sTableStates;
-
-///------------------------------------------------------------------------------------------------
-
-std::vector<poker::Card> CreateShuffledDeck()
-{
-    std::vector<poker::Card> deck;
-    
-    for (const auto& suit: { poker::CardSuit::SPADE, poker::CardSuit::HEART, poker::CardSuit::DIAMOND, poker::CardSuit::CLUB})
-    {
-        for (auto i = static_cast<int>(poker::CardRank::TWO); i < static_cast<int>(poker::CardRank::ACE); ++i)
-        {
-            deck.push_back(poker::Card(static_cast<poker::CardRank>(i), suit));
-        }
-    }
-    
-    std::random_device rd;
-    std::mt19937 g(rd());
-    std::shuffle(deck.begin(), deck.end(), g);
-    return deck;
-}
 
 ///------------------------------------------------------------------------------------------------
 
@@ -88,90 +40,6 @@ void UpdateTableLoop()
 {
     while (true)
     {
-        std::lock_guard<std::mutex> globalTableLock(sGlobalTableMutex);
-        for (auto& tableStateEntry: sTableStates)
-        {
-            switch (tableStateEntry.second.mRoundState)
-            {
-                case InternalTableState::RoundState::PLACING_BLINDS:
-                {
-                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_HOLE_CARDS;
-                } break;
-                    
-                case InternalTableState::RoundState::DEALING_HOLE_CARDS:
-                {
-                    for (auto& playerEntry: tableStateEntry.second.mPlayerHoleCards)
-                    {
-                        playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
-                        tableStateEntry.second.mDeck.pop_back();
-                        playerEntry.second.push_back(tableStateEntry.second.mDeck.back());
-                        tableStateEntry.second.mDeck.pop_back();
-                    }
-                    
-                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_PREFLOP;
-                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
-                } break;
-                    
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_PREFLOP:
-                {
-                    auto secondsDelta = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - tableStateEntry.second.mTableTimer).count();
-                    if (secondsDelta > 5)
-                    {
-                        tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_FLOP;
-                    }
-                } break;
-                    
-                case InternalTableState::RoundState::DEALING_FLOP:
-                {
-                    for (int i = 0; i < 3; ++i)
-                    {
-                        tableStateEntry.second.mCommunityCards.push_back(tableStateEntry.second.mDeck.back());
-                        tableStateEntry.second.mDeck.pop_back();
-                    }
-                    
-                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
-                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTFLOP;
-                } break;
-                
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTFLOP:
-                {
-                    auto secondsDelta = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - tableStateEntry.second.mTableTimer).count();
-                    if (secondsDelta > 2)
-                    {
-                        tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_TURN;
-                    }
-                } break;
-                    
-                case InternalTableState::RoundState::DEALING_TURN:
-                {
-                    tableStateEntry.second.mCommunityCards.push_back(tableStateEntry.second.mDeck.back());
-                    tableStateEntry.second.mDeck.pop_back();
-                    
-                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
-                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTTURN;
-                } break;
-                    
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTTURN:
-                {
-                    auto secondsDelta = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - tableStateEntry.second.mTableTimer).count();
-                    if (secondsDelta > 3)
-                    {
-                        tableStateEntry.second.mRoundState = InternalTableState::RoundState::DEALING_RIVER;
-                    }
-                } break;
-                    
-                case InternalTableState::RoundState::DEALING_RIVER:
-                {
-                    tableStateEntry.second.mCommunityCards.push_back(tableStateEntry.second.mDeck.back());
-                    tableStateEntry.second.mDeck.pop_back();
-                    
-                    tableStateEntry.second.mTableTimer = std::chrono::high_resolution_clock::now();
-                    tableStateEntry.second.mRoundState = InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTRIVER;
-                } break;
-                    
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTRIVER: break;
-            }
-        }
     }
 }
 
@@ -192,85 +60,28 @@ void SendMessageToClient(nlohmann::json& messageJson, networking::MessageType me
 
 ///------------------------------------------------------------------------------------------------
 
-void OnClientPlayRequestMessage(const nlohmann::json& json, const int clientSocket)
+void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSocket)
 {
-    networking::PlayResponse playResponse = {};
-    playResponse.allowed = true;
-    playResponse.playerId = sPlayerIdCounter;
-    playResponse.tableId = sTableIdCounter;
+    networking::LoginResponse loginResponse = {};
+    loginResponse.allowed = true;
+    loginResponse.playerId = sPlayerIdCounter++;
     
-    {
-        std::lock_guard<std::mutex> globalTableStateLock(sGlobalTableMutex);
-
-        sTableStates[sTableIdCounter].mDeck = CreateShuffledDeck();
-        
-        sTableStates[sTableIdCounter].mPlayerHoleCards.push_back(std::make_pair(sPlayerIdCounter++, std::vector<poker::Card>()));
-        sTableStates[sTableIdCounter].mPlayerHoleCards.push_back(std::make_pair(sPlayerIdCounter++, std::vector<poker::Card>())); // Bot
-
-        sTableStates[sTableIdCounter].mRoundState = InternalTableState::RoundState::PLACING_BLINDS;
-        sTableIdCounter++;
-    }
-    
-    auto playResponseJson = playResponse.SerializeToJson();
-    SendMessageToClient(playResponseJson, networking::MessageType::SC_PLAY_RESPONSE, clientSocket);
+    auto loginResponseJson = loginResponse.SerializeToJson();
+    SendMessageToClient(loginResponseJson, networking::MessageType::SC_LOGIN_RESPONSE, clientSocket);
 }
 
 ///------------------------------------------------------------------------------------------------
 
-void OnClientTableStateRequestMessage(const nlohmann::json& json, const int clientSocket)
+void OnClientSpinRequestMessage(const nlohmann::json& json, const int clientSocket)
 {
-    networking::TableStateRequest tableStateRequest = {};
-    tableStateRequest.DeserializeFromJson(json);
+    networking::SpinResponse spinResponse = {};
     
-    networking::TableStateResponse tableStateResponse = {};
+    std::random_device rd;
+    std::mt19937_64 g(rd());
     
-    {
-        std::lock_guard<std::mutex> globalTableStateLock(sGlobalTableMutex);
-        auto tableIter = sTableStates.find(tableStateRequest.tableId);
-        if (tableIter != sTableStates.end())
-        {
-            const auto& table = tableIter->second;
-            
-            for (int i = 0; i < table.mCommunityCards.size(); ++i)
-            {
-                tableStateResponse.communityCards += table.mCommunityCards[i].ToString();
-                if (i != table.mCommunityCards.size() - 1)
-                {
-                    tableStateResponse.communityCards += ",";
-                }
-            }
-            
-            for (const auto& playerEntry: table.mPlayerHoleCards)
-            {
-                tableStateResponse.holeCardPlayerIds.push_back(playerEntry.first);
-                
-                if (playerEntry.first == tableStateRequest.playerId)
-                {
-                    tableStateResponse.holeCards.push_back(playerEntry.second[0].ToString() + "," + playerEntry.second[1].ToString());
-                }
-                else
-                {
-                    tableStateResponse.holeCards.push_back("0,0"); // All foreign hole cards are unknown
-                }
-            }
-            
-            switch (table.mRoundState)
-            {
-                case InternalTableState::RoundState::PLACING_BLINDS: tableStateResponse.roundStateName = "PLACING_BLINDS"; break;
-                case InternalTableState::RoundState::DEALING_HOLE_CARDS: tableStateResponse.roundStateName = "DEALING_HOLE_CARDS"; break;
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_PREFLOP: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_PREFLOP"; break;
-                case InternalTableState::RoundState::DEALING_FLOP: tableStateResponse.roundStateName = "DEALING_FLOP"; break;
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTFLOP: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_POSTFLOP"; break;
-                case InternalTableState::RoundState::DEALING_TURN: tableStateResponse.roundStateName = "DEALING_TURN"; break;
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTTURN: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_POSTTURN"; break;
-                case InternalTableState::RoundState::DEALING_RIVER: tableStateResponse.roundStateName = "DEALING_RIVER"; break;
-                case InternalTableState::RoundState::WAITING_FOR_ACTIONS_POSTRIVER: tableStateResponse.roundStateName = "WAITING_FOR_ACTIONS_POSTRIVER"; break;
-            }
-        }
-    }
-    
-    auto tableStateResponseJson = tableStateResponse.SerializeToJson();
-    SendMessageToClient(tableStateResponseJson, networking::MessageType::SC_TABLE_STATE_RESPONSE, clientSocket);
+    spinResponse.spinId = g();
+    auto spinResponseJson = spinResponse.SerializeToJson();
+    SendMessageToClient(spinResponseJson, networking::MessageType::SC_SPIN_RESPONSE, clientSocket);
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -313,13 +124,13 @@ void HandleClient(int clientSocket)
         {
             nlohmann::json receivedJson = nlohmann::json::parse(jsonMessage);
             
-            if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_PLAY_REQUEST))
+            if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_LOGIN_REQUEST))
             {
-                OnClientPlayRequestMessage(receivedJson, clientSocket);
+                OnClientLoginRequestMessage(receivedJson, clientSocket);
             }
-            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_TABLE_STATE_REQUEST))
+            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_SPIN_REQUEST))
             {
-                OnClientTableStateRequestMessage(receivedJson, clientSocket);
+                OnClientSpinRequestMessage(receivedJson, clientSocket);
             }
         }
         catch (const std::exception& e)
