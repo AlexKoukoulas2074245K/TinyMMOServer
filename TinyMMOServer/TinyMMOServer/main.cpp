@@ -77,7 +77,7 @@ void OnClientSpinRequestMessage(const nlohmann::json& json, const int clientSock
     networking::SpinResponse spinResponse = {};
     
     std::random_device rd;
-    std::mt19937_64 g(rd());
+    std::mt19937 g(rd());
     
     spinResponse.spinId = g();
     auto spinResponseJson = spinResponse.SerializeToJson();
