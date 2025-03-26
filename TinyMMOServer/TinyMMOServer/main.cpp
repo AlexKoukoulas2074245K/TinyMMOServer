@@ -21,6 +21,7 @@
 
 #include "net_common/NetworkMessages.h"
 #include "net_common/SerializableNetworkObjects.h"
+#include "net_common/Version.h"
 #include "util/Date.h"
 #include "util/FileUtils.h"
 #include "util/Json.h"
@@ -123,6 +124,16 @@ void HandleClient(int clientSocket)
         try
         {
             nlohmann::json receivedJson = nlohmann::json::parse(jsonMessage);
+            
+            if (receivedJson.count("version"))
+            {
+                const auto& clientLibVersion = receivedJson.at("version").get<std::string>();
+                const auto& currentLibVersion = std::string(NET_COMMON_VERSION);
+                if (clientLibVersion != currentLibVersion)
+                {
+                    logging::Log(logging::LogType::ERROR, "Client/Server version mismatch: Client at %s, Server at %s", clientLibVersion.c_str(), currentLibVersion.c_str());
+                }
+            }
             
             if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_LOGIN_REQUEST))
             {
