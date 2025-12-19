@@ -11,6 +11,7 @@
 #include <chrono>
 #include <fstream>
 #include <netinet/in.h>
+#include <enet/enet.h>
 #include <sys/socket.h>
 #include <mutex>
 #include <thread>
@@ -19,9 +20,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "net_common/NetworkMessages.h"
-#include "net_common/SerializableNetworkObjects.h"
+#include "net_common/Common.h"
 #include "net_common/Version.h"
+
 #include "util/Date.h"
 #include "util/FileUtils.h"
 #include "util/Json.h"
@@ -29,182 +30,121 @@
 #include "util/MathUtils.h"
 #include "util/StringUtils.h"
 
-///------------------------------------------------------------------------------------------------
-
-static constexpr int PORT = 8070;
-static constexpr int MAX_INCOMING_MSG_BUFFER_SIZE = 8192;
-static std::atomic<long long> sPlayerIdCounter = 1;
 
 ///------------------------------------------------------------------------------------------------
 
-void UpdateTableLoop()
+struct PlayerState
 {
-    while (true)
-    {
-    }
-}
+    Vec2 position{};
+};
 
-///------------------------------------------------------------------------------------------------
-
-void SendMessageToClient(nlohmann::json& messageJson, networking::MessageType messageType, const int clientSocket)
+int main()
 {
-    networking::PopulateMessageHeader(messageJson, messageType);
-    
-    std::string messageString = messageJson.dump();
-    if (send(clientSocket, messageString.c_str(), messageString.size(), 0) == -1)
-    {
-        logging::Log(logging::LogType::ERROR, "Error sending message to client");
-        close(clientSocket);
-        return;
-    }
-}
+    enet_initialize();
+    atexit(enet_deinitialize);
 
-///------------------------------------------------------------------------------------------------
+    ENetAddress address{};
+    address.host = ENET_HOST_ANY;
+    address.port = 7777;
 
-void OnClientLoginRequestMessage(const nlohmann::json& json, const int clientSocket)
-{
-    networking::LoginResponse loginResponse = {};
-    loginResponse.allowed = true;
-    loginResponse.playerId = sPlayerIdCounter++;
-    
-    auto loginResponseJson = loginResponse.SerializeToJson();
-    SendMessageToClient(loginResponseJson, networking::MessageType::SC_LOGIN_RESPONSE, clientSocket);
-}
+    ENetHost* server = enet_host_create(
+        &address,
+        32,     // max clients
+        2,      // channels
+        0, 0
+    );
 
-///------------------------------------------------------------------------------------------------
+    std::unordered_map<ENetPeer*, uint32_t> peerToPlayerId;
+    std::unordered_map<uint32_t, PlayerState> players;
 
-void OnClientSpinRequestMessage(const nlohmann::json& json, const int clientSocket)
-{
-    networking::SpinResponse spinResponse = {};
-    
-    std::random_device rd;
-    std::mt19937 g(rd());
-    
-    spinResponse.spinId = g();
-    auto spinResponseJson = spinResponse.SerializeToJson();
-    SendMessageToClient(spinResponseJson, networking::MessageType::SC_SPIN_RESPONSE, clientSocket);
-}
+    uint32_t nextPlayerId = 1;
 
-///------------------------------------------------------------------------------------------------
+    logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
-void HandleClient(int clientSocket)
-{
-    std::string jsonMessage;
+    ENetEvent event;
+    const float tickRate = 20.0f;
+    const float tickInterval = 1.0f / tickRate;
+    double lastTick = enet_time_get() / 1000.0;
 
     while (true)
     {
-        char buffer[MAX_INCOMING_MSG_BUFFER_SIZE];
-        ssize_t bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
-        if (bytesReceived == -1)
+        while (enet_host_service(server, &event, 1) > 0)
         {
-            logging::Log(logging::LogType::ERROR, "recv() failed: Message too large");
-            break;
-        }
-        else if (bytesReceived == 0)
-        {
-            // Connection closed by client
-            break;
-        } 
-        else
-        {
-            jsonMessage.append(buffer, bytesReceived);
-            if (jsonMessage.find('\0') != std::string::npos)
+            switch (event.type)
             {
-                // Null character found, indicating end of JSON message
-                break;
-            }
-        }
-    }
-
-    if (!jsonMessage.empty())
-    {
-        //logging::Log(logging::LogType::INFO, "Received message from client: %s", jsonMessage.c_str());
-
-        // Parse JSON
-        try
-        {
-            nlohmann::json receivedJson = nlohmann::json::parse(jsonMessage);
-            
-            if (receivedJson.count("version"))
-            {
-                const auto& clientLibVersion = receivedJson.at("version").get<std::string>();
-                const auto& currentLibVersion = std::string(NET_COMMON_VERSION);
-                if (clientLibVersion != currentLibVersion)
+                case ENET_EVENT_TYPE_CONNECT:
                 {
-                    logging::Log(logging::LogType::ERROR, "Client/Server version mismatch: Client at %s, Server at %s", clientLibVersion.c_str(), currentLibVersion.c_str());
+                    uint32_t id = nextPlayerId++;
+                    peerToPlayerId[event.peer] = id;
+                    players[id] = {};
+                    
+                    logging::Log(logging::LogType::INFO, "Player %d connected", id);
+                    break;
                 }
-            }
-            
-            if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_LOGIN_REQUEST))
-            {
-                OnClientLoginRequestMessage(receivedJson, clientSocket);
-            }
-            else if (networking::IsMessageOfType(receivedJson, networking::MessageType::CS_SPIN_REQUEST))
-            {
-                OnClientSpinRequestMessage(receivedJson, clientSocket);
+
+                case ENET_EVENT_TYPE_RECEIVE:
+                {
+                    auto* data = event.packet->data;
+                    auto type = static_cast<MessageType>(data[0]);
+                    uint32_t playerId = peerToPlayerId[event.peer];
+
+                    if (type == MessageType::MOVE)
+                    {
+                        auto* msg = reinterpret_cast<MoveMessage*>(data);
+                        players[playerId].position = msg->position;
+                    }
+                    else if (type == MessageType::ATTACK)
+                    {
+                        logging::Log(logging::LogType::INFO, "Player %d attacked", playerId);
+                    }
+                    else if (type == MessageType::QUEST_COMPLETE)
+                    {
+                        auto* msg = reinterpret_cast<QuestCompleteMessage*>(data);
+                        logging::Log(logging::LogType::INFO, "Player %d completed quest %d", playerId, msg->questId);
+                    }
+
+                    enet_packet_destroy(event.packet);
+                    break;
+                }
+
+                case ENET_EVENT_TYPE_DISCONNECT:
+                {
+                    uint32_t id = peerToPlayerId[event.peer];
+                    players.erase(id);
+                    peerToPlayerId.erase(event.peer);
+                    logging::Log(logging::LogType::INFO, "Player %d disconnected.", id);
+                    break;
+                }
+
+                default: break;
             }
         }
-        catch (const std::exception& e)
+
+        double now = enet_time_get() / 1000.0;
+        if (now - lastTick >= tickInterval)
         {
-            logging::Log(logging::LogType::ERROR, "Error parsing JSON: %s", e.what());
+            lastTick = now;
+
+            // Broadcast snapshots
+            for (auto& [playerId, state] : players)
+            {
+                SnapshotMessage snap{};
+                snap.type = MessageType::SNAPSHOT;
+                snap.playerId = playerId;
+                snap.position = state.position;
+
+                ENetPacket* packet = enet_packet_create(
+                    &snap,
+                    sizeof(snap),
+                    0 // UNRELIABLE
+                );
+
+                enet_host_broadcast(server, 0, packet);
+            }
         }
     }
 
-    close(clientSocket);
-}
-
-///------------------------------------------------------------------------------------------------
-
-int main(int argc, char* argv[])
-{
-    logging::Log(logging::LogType::INFO, "Initializing server from CWD: %s", argv[0]);
-    
-    int serverSocket, clientSocket;
-    struct sockaddr_in serverAddr, clientAddr;
-    socklen_t clientAddrLen = sizeof(clientAddr);
-
-    // Create socket
-    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) == 0)
-    {
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    // Bind socket
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-    serverAddr.sin_port = htons(PORT); // Change port as needed
-
-    if (bind(serverSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0)
-    {
-        logging::Log(logging::LogType::ERROR, "bind() failed: probably already in use");
-        exit(EXIT_FAILURE);
-    }
-
-    // Listen
-    if (listen(serverSocket, 3) < 0)
-    {
-        logging::Log(logging::LogType::ERROR, "listen() failed");
-        exit(EXIT_FAILURE);
-    }
-    
-    logging::Log(logging::LogType::INFO, "Listening for connections on port: %d", PORT);
-    
-    // Table Update Loop
-    std::thread(UpdateTableLoop).detach();
-    
-    // Accept and handle incoming connections
-    while (true)
-    {
-        if ((clientSocket = accept(serverSocket, (struct sockaddr *)&clientAddr, &clientAddrLen)) < 0)
-        {
-            continue;
-        }
-
-        std::thread(HandleClient, clientSocket).detach();
-    }
-    
-    return 0;
+    enet_host_destroy(server);
 }
 
 ///------------------------------------------------------------------------------------------------
