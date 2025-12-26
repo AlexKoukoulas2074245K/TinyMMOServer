@@ -20,7 +20,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "net_common/Common.h"
+#include "net_common/NetworkMessages.h"
 #include "net_common/Version.h"
 
 #include "util/Date.h"
@@ -35,7 +35,7 @@
 
 struct PlayerState
 {
-    Vec2 position{};
+    glm::vec2 position{};
 };
 
 int main()
@@ -88,16 +88,16 @@ int main()
                     auto type = static_cast<MessageType>(data[0]);
                     uint32_t playerId = peerToPlayerId[event.peer];
 
-                    if (type == MessageType::MOVE)
+                    if (type == MessageType::MoveMessage)
                     {
                         auto* msg = reinterpret_cast<MoveMessage*>(data);
                         players[playerId].position = msg->position;
                     }
-                    else if (type == MessageType::ATTACK)
+                    else if (type == MessageType::AttackMessage)
                     {
                         logging::Log(logging::LogType::INFO, "Player %d attacked", playerId);
                     }
-                    else if (type == MessageType::QUEST_COMPLETE)
+                    else if (type == MessageType::QuestCompleteMessage)
                     {
                         auto* msg = reinterpret_cast<QuestCompleteMessage*>(data);
                         logging::Log(logging::LogType::INFO, "Player %d completed quest %d", playerId, msg->questId);
@@ -129,7 +129,6 @@ int main()
             for (auto& [playerId, state] : players)
             {
                 SnapshotMessage snap{};
-                snap.type = MessageType::SNAPSHOT;
                 snap.playerId = playerId;
                 snap.position = state.position;
 
