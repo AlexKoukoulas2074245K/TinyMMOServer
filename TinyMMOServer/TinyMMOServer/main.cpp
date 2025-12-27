@@ -53,7 +53,13 @@ int main()
         2,      // channels
         0, 0
     );
-
+    
+    if (!server)
+    {
+        logging::Log(logging::LogType::ERROR, "Failed to create ENet host!");
+        return EXIT_FAILURE;
+    }
+    
     std::unordered_map<ENetPeer*, uint32_t> peerToPlayerId;
     std::unordered_map<uint32_t, PlayerState> players;
 
@@ -88,22 +94,30 @@ int main()
                     auto type = static_cast<MessageType>(data[0]);
                     
                     auto messageValidity = GetMessageVersionValidity(data);
-                    uint32_t playerId = peerToPlayerId[event.peer];
+                    if (messageValidity == MessageVersionValidityEnum::VALID)
+                    {
+                        uint32_t playerId = peerToPlayerId[event.peer];
 
-                    if (type == MessageType::MoveMessage)
-                    {
-                        auto* msg = reinterpret_cast<MoveMessage*>(data);
-                        players[playerId].position = msg->position;
+                        if (type == MessageType::MoveMessage)
+                        {
+                            auto* msg = reinterpret_cast<MoveMessage*>(data);
+                            players[playerId].position = msg->position;
+                        }
+                        else if (type == MessageType::AttackMessage)
+                        {
+                            logging::Log(logging::LogType::INFO, "Player %d attacked", playerId);
+                        }
+                        else if (type == MessageType::QuestCompleteMessage)
+                        {
+                            auto* msg = reinterpret_cast<QuestCompleteMessage*>(data);
+                            logging::Log(logging::LogType::INFO, "Player %d completed quest %d", playerId, msg->questId);
+                        }
                     }
-                    else if (type == MessageType::AttackMessage)
+                    else
                     {
-                        logging::Log(logging::LogType::INFO, "Player %d attacked", playerId);
+                        logging::Log(logging::LogType::ERROR, "Invalid incoming message: %s", GetMessageVersionValidityString(messageValidity));
                     }
-                    else if (type == MessageType::QuestCompleteMessage)
-                    {
-                        auto* msg = reinterpret_cast<QuestCompleteMessage*>(data);
-                        logging::Log(logging::LogType::INFO, "Player %d completed quest %d", playerId, msg->questId);
-                    }
+                    
 
                     enet_packet_destroy(event.packet);
                     break;
