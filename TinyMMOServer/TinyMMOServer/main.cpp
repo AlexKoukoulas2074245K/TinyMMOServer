@@ -86,6 +86,8 @@ int main()
                 {
                     auto* data = event.packet->data;
                     auto type = static_cast<MessageType>(data[0]);
+                    
+                    auto messageValidity = GetMessageVersionValidity(data);
                     uint32_t playerId = peerToPlayerId[event.peer];
 
                     if (type == MessageType::MoveMessage)
