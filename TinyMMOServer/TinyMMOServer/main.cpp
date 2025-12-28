@@ -35,6 +35,8 @@
 struct PlayerState
 {
     glm::vec2 position{};
+    glm::vec2 velocity{};
+    int animationIndex = 0;
 };
 
 int main()
@@ -107,6 +109,8 @@ int main()
                         {
                             auto* msg = reinterpret_cast<MoveMessage*>(data);
                             players[playerId].position = msg->position;
+                            players[playerId].velocity = msg->velocity;
+                            players[playerId].animationIndex = msg->animationIndex;
                         }
                         else if (type == MessageType::AttackMessage)
                         {
@@ -134,6 +138,11 @@ int main()
                     players.erase(id);
                     peerToPlayerId.erase(event.peer);
                     logging::Log(logging::LogType::INFO, "Player %d disconnected.", id);
+                    
+                    PlayerDisconnectedMessage playerDCed = {};
+                    playerDCed.playerId = id;
+                    
+                    BroadcastMessage(server, &playerDCed, sizeof(playerDCed), channels::RELIABLE);
                     break;
                 }
 
@@ -152,8 +161,9 @@ int main()
                 SnapshotMessage snap{};
                 snap.playerId = playerId;
                 snap.position = state.position;
-                
-                BroadcastMessage(server, &snap, sizeof(snap), channels::RELIABLE);
+                snap.velocity = state.velocity;
+                snap.animationIndex = state.animationIndex;
+                BroadcastMessage(server, &snap, sizeof(snap), channels::UNRELIABLE);
             }
         }
     }
