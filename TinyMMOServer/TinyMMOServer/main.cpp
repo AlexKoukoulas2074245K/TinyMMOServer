@@ -11,7 +11,6 @@
 #include <chrono>
 #include <fstream>
 #include <netinet/in.h>
-#include <enet/enet.h>
 #include <sys/socket.h>
 #include <mutex>
 #include <thread>
@@ -85,6 +84,12 @@ int main()
                     players[id] = {};
                     
                     logging::Log(logging::LogType::INFO, "Player %d connected", id);
+                    
+                    AssignPlayerIdMessage assignIdMessage = {};
+                    assignIdMessage.playerId = id;
+                    
+                    SendMessage(event.peer, &assignIdMessage, sizeof(assignIdMessage), channels::RELIABLE);
+        
                     break;
                 }
 
@@ -105,7 +110,7 @@ int main()
                         }
                         else if (type == MessageType::AttackMessage)
                         {
-                            logging::Log(logging::LogType::INFO, "Player %d attacked", playerId);
+                            //logging::Log(logging::LogType::INFO, "Player %d attacked", playerId);
                         }
                         else if (type == MessageType::QuestCompleteMessage)
                         {
@@ -147,14 +152,8 @@ int main()
                 SnapshotMessage snap{};
                 snap.playerId = playerId;
                 snap.position = state.position;
-
-                ENetPacket* packet = enet_packet_create(
-                    &snap,
-                    sizeof(snap),
-                    0 // UNRELIABLE
-                );
-
-                enet_host_broadcast(server, 0, packet);
+                
+                BroadcastMessage(server, &snap, sizeof(snap), channels::RELIABLE);
             }
         }
     }
