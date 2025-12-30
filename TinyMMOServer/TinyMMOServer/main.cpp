@@ -5,17 +5,7 @@
 ///  Created by Alex Koukoulas on 25/04/2024
 ///------------------------------------------------------------------------------------------------
 
-#include <algorithm>
-#include <atomic>
-#include <arpa/inet.h>
-#include <chrono>
 #include <fstream>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <mutex>
-#include <thread>
-#include <unistd.h>
-#include <unordered_set>
 #include <unordered_map>
 #include <vector>
 
@@ -24,20 +14,21 @@
 
 #include "util/Date.h"
 #include "util/FileUtils.h"
-#include "util/Json.h"
 #include "util/Logging.h"
 #include "util/MathUtils.h"
 #include "util/StringUtils.h"
 
+///------------------------------------------------------------------------------------------------
+
+using namespace network;
 
 ///------------------------------------------------------------------------------------------------
 
-struct PlayerState
-{
-    glm::vec2 position{};
-    glm::vec2 velocity{};
-    int animationIndex = 0;
-};
+static const float PROJECTILE_TTL = 3.0f;
+static const float PLAYER_BASE_SPEED = 0.0003f;
+static const float PROJECTILE_SPEED = 0.001f;
+
+///------------------------------------------------------------------------------------------------
 
 int main()
 {
@@ -61,10 +52,12 @@ int main()
         return EXIT_FAILURE;
     }
     
-    std::unordered_map<ENetPeer*, uint32_t> peerToPlayerId;
-    std::unordered_map<uint32_t, PlayerState> players;
+    std::unordered_map<ENetPeer*, objectId_t> peerToPlayerId;
+    std::unordered_map<objectId_t, ObjectData> objectDataMap;
+    std::unordered_map<objectId_t, float> tempObjectTTL;
+    std::vector<objectId_t> tempObjectsToRemove;
 
-    uint32_t nextPlayerId = 1;
+    objectId_t nextId = 1;
 
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
@@ -81,17 +74,31 @@ int main()
             {
                 case ENET_EVENT_TYPE_CONNECT:
                 {
-                    uint32_t id = nextPlayerId++;
+                    const auto id = nextId++;
                     peerToPlayerId[event.peer] = id;
-                    players[id] = {};
+                    objectDataMap[id] = {};
+                    objectDataMap[id].objectId = id;
+                    objectDataMap[id].objectType = network::ObjectType::PLAYER;
+                    objectDataMap[id].attackType = network::AttackType::NONE;
+                    objectDataMap[id].projectileType = network::ProjectileType::NONE;
+                    objectDataMap[id].position = glm::vec3( math::RandomFloat(-0.3f, 0.3f), math::RandomFloat(-0.18f, 0.18f), math::RandomFloat(0.11f, 0.5f));
+                    objectDataMap[id].velocity = glm::vec3(0.0f);
+                    objectDataMap[id].currentAnimation = network::AnimationType::RUNNING;
+                    objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
+                    objectDataMap[id].speed = PLAYER_BASE_SPEED;
                     
                     logging::Log(logging::LogType::INFO, "Player %d connected", id);
                     
-                    AssignPlayerIdMessage assignIdMessage = {};
-                    assignIdMessage.playerId = id;
+                    PlayerConnectedMessage playerConnectedMessage = {};
+                    playerConnectedMessage.objectId = id;
                     
-                    SendMessage(event.peer, &assignIdMessage, sizeof(assignIdMessage), channels::RELIABLE);
-        
+                    SendMessage(event.peer, &playerConnectedMessage, sizeof(playerConnectedMessage), channels::RELIABLE);
+                    
+                    ObjectCreatedMessage objectCreatedMessage = {};
+                    objectCreatedMessage.objectData = objectDataMap[id];
+                    
+                    BroadcastMessage(server, &objectCreatedMessage, sizeof(objectCreatedMessage), channels::RELIABLE);
+
                     break;
                 }
 
@@ -103,23 +110,55 @@ int main()
                     auto messageValidity = GetMessageVersionValidity(data);
                     if (messageValidity == MessageVersionValidityEnum::VALID)
                     {
-                        uint32_t playerId = peerToPlayerId[event.peer];
+                        objectId_t playerId = peerToPlayerId[event.peer];
 
-                        if (type == MessageType::MoveMessage)
+                        if (type == MessageType::ObjectStateUpdateMessage)
                         {
-                            auto* msg = reinterpret_cast<MoveMessage*>(data);
-                            players[playerId].position = msg->position;
-                            players[playerId].velocity = msg->velocity;
-                            players[playerId].animationIndex = msg->animationIndex;
+                            auto* msg = reinterpret_cast<ObjectStateUpdateMessage*>(data);
+                            
+                            // Make sure player updates directly only their data
+                            assert(playerId == msg->objectData.objectId);
+                            
+                            // More checks here probably
+                            objectDataMap[playerId] = msg->objectData;
                         }
                         else if (type == MessageType::AttackMessage)
                         {
-                            //logging::Log(logging::LogType::INFO, "Player %d attacked", playerId);
-                        }
-                        else if (type == MessageType::QuestCompleteMessage)
-                        {
-                            auto* msg = reinterpret_cast<QuestCompleteMessage*>(data);
-                            logging::Log(logging::LogType::INFO, "Player %d completed quest %d", playerId, msg->questId);
+                            auto* msg = reinterpret_cast<AttackMessage*>(data);
+                            const auto& attackerData = objectDataMap.at(msg->attackerId);
+                            
+                            if (msg->attackType == network::AttackType::PROJECTILE && msg->projectileType == network::ProjectileType::FIREBALL)
+                            {
+                                const auto id = nextId++;
+                                objectDataMap[id] = {};
+                                objectDataMap[id].objectId = id;
+                                objectDataMap[id].objectType = network::ObjectType::ATTACK;
+                                objectDataMap[id].attackType = msg->attackType;
+                                objectDataMap[id].projectileType = msg->projectileType;
+                                objectDataMap[id].position = attackerData.position;
+                                objectDataMap[id].position.z -= 0.001f;
+                                objectDataMap[id].currentAnimation = network::AnimationType::IDLE;
+                                objectDataMap[id].facingDirection = attackerData.facingDirection;
+                                objectDataMap[id].speed = PROJECTILE_SPEED;
+                                tempObjectTTL[id] = PROJECTILE_TTL;
+                                
+                                switch (attackerData.facingDirection)
+                                {
+                                    case network::FacingDirection::NORTH_WEST: objectDataMap[id].velocity = glm::vec3(-PROJECTILE_SPEED, PROJECTILE_SPEED, 0.0f); break;
+                                    case network::FacingDirection::NORTH_EAST: objectDataMap[id].velocity = glm::vec3(PROJECTILE_SPEED, PROJECTILE_SPEED, 0.0f); break;
+                                    case network::FacingDirection::SOUTH_WEST: objectDataMap[id].velocity = glm::vec3(-PROJECTILE_SPEED, -PROJECTILE_SPEED, 0.0f); break;
+                                    case network::FacingDirection::SOUTH_EAST: objectDataMap[id].velocity = glm::vec3(PROJECTILE_SPEED, -PROJECTILE_SPEED, 0.0f); break;
+                                    case network::FacingDirection::NORTH: objectDataMap[id].velocity = glm::vec3(0.0f, PROJECTILE_SPEED, 0.0f); break;
+                                    case network::FacingDirection::SOUTH: objectDataMap[id].velocity = glm::vec3(0.0f, -PROJECTILE_SPEED, 0.0f); break;
+                                    case network::FacingDirection::WEST: objectDataMap[id].velocity = glm::vec3(-PROJECTILE_SPEED, 0.0f, 0.0f); break;
+                                    case network::FacingDirection::EAST: objectDataMap[id].velocity = glm::vec3(PROJECTILE_SPEED, 0.0f, 0.0f); break;
+                                }
+                                
+                                ObjectCreatedMessage objectCreatedMessage = {};
+                                objectCreatedMessage.objectData = objectDataMap[id];
+                                
+                                BroadcastMessage(server, &objectCreatedMessage, sizeof(objectCreatedMessage), channels::RELIABLE);
+                            }
                         }
                     }
                     else
@@ -134,13 +173,13 @@ int main()
 
                 case ENET_EVENT_TYPE_DISCONNECT:
                 {
-                    uint32_t id = peerToPlayerId[event.peer];
-                    players.erase(id);
+                    objectId_t id = peerToPlayerId[event.peer];
+                    objectDataMap.erase(id);
                     peerToPlayerId.erase(event.peer);
                     logging::Log(logging::LogType::INFO, "Player %d disconnected.", id);
                     
                     PlayerDisconnectedMessage playerDCed = {};
-                    playerDCed.playerId = id;
+                    playerDCed.objectId = id;
                     
                     BroadcastMessage(server, &playerDCed, sizeof(playerDCed), channels::RELIABLE);
                     break;
@@ -149,21 +188,48 @@ int main()
                 default: break;
             }
         }
-
+        
         double now = enet_time_get() / 1000.0;
+        float dtMillis = (now - lastTick) * 1000.0f;
+
         if (now - lastTick >= tickInterval)
         {
+            for (auto& [objectId, ttl]: tempObjectTTL)
+            {
+                auto& objectData = objectDataMap[objectId];
+                if (objectData.objectType == network::ObjectType::ATTACK && objectData.attackType == network::AttackType::PROJECTILE)
+                {
+                    objectData.position += objectData.velocity * dtMillis;
+                }
+
+                ttl -= dtMillis / 1000.0f;
+                if (ttl <= 0.0f)
+                {
+                    tempObjectsToRemove.push_back(objectId);
+                }
+            }
+            
+            for (auto objectIdToRemove: tempObjectsToRemove)
+            {
+                ObjectDestroyedMessage objectDestroyedMessage{};
+                objectDestroyedMessage.objectId = objectIdToRemove;
+                
+                BroadcastMessage(server, &objectDestroyedMessage, sizeof(objectDestroyedMessage), channels::RELIABLE);
+                
+                tempObjectTTL.erase(objectIdToRemove);
+                objectDataMap.erase(objectIdToRemove);
+            }
+            tempObjectsToRemove.clear();
+            
             lastTick = now;
 
             // Broadcast snapshots
-            for (auto& [playerId, state] : players)
+            for (auto& [objectId, data] : objectDataMap)
             {
-                SnapshotMessage snap{};
-                snap.playerId = playerId;
-                snap.position = state.position;
-                snap.velocity = state.velocity;
-                snap.animationIndex = state.animationIndex;
-                BroadcastMessage(server, &snap, sizeof(snap), channels::UNRELIABLE);
+                ObjectStateUpdateMessage stateUpdateMessage{};
+                stateUpdateMessage.objectData = data;
+
+                BroadcastMessage(server, &stateUpdateMessage, sizeof(stateUpdateMessage), channels::UNRELIABLE);
             }
         }
     }
