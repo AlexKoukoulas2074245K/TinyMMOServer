@@ -57,8 +57,19 @@ int main()
     std::unordered_map<objectId_t, float> tempObjectTTL;
     std::vector<objectId_t> tempObjectsToRemove;
 
-    objectId_t nextId = 1;
+    objectId_t nextId = 2;
 
+    objectDataMap[1] = {};
+    objectDataMap[1].objectId = 1;
+    objectDataMap[1].objectType = network::ObjectType::PLAYER;
+    objectDataMap[1].attackType = network::AttackType::NONE;
+    objectDataMap[1].projectileType = network::ProjectileType::NONE;
+    objectDataMap[1].position = glm::vec3( math::RandomFloat(0.0f, 0.0f), math::RandomFloat(0.0f, 0.0f), math::RandomFloat(0.11f, 0.5f));
+    objectDataMap[1].velocity = glm::vec3(0.0f);
+    objectDataMap[1].currentAnimation = network::AnimationType::RUNNING;
+    objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
+    objectDataMap[1].speed = PLAYER_BASE_SPEED;
+    
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
     ENetEvent event;
