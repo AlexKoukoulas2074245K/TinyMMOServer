@@ -28,6 +28,8 @@ static const float PROJECTILE_TTL = 3.0f;
 static const float PLAYER_BASE_SPEED = 0.0003f;
 static const float PROJECTILE_SPEED = 0.001f;
 
+static const std::string STARTING_ZONE = "forest_1";
+
 ///------------------------------------------------------------------------------------------------
 
 int main()
@@ -64,11 +66,12 @@ int main()
     objectDataMap[1].objectType = network::ObjectType::PLAYER;
     objectDataMap[1].attackType = network::AttackType::NONE;
     objectDataMap[1].projectileType = network::ProjectileType::NONE;
-    objectDataMap[1].position = glm::vec3( math::RandomFloat(0.0f, 0.0f), math::RandomFloat(0.0f, 0.0f), math::RandomFloat(0.11f, 0.5f));
+    objectDataMap[1].position = glm::vec3(-1.3f, -1.0f, math::RandomFloat(0.11f, 0.5f));
     objectDataMap[1].velocity = glm::vec3(0.0f);
     objectDataMap[1].currentAnimation = network::AnimationType::RUNNING;
     objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
     objectDataMap[1].speed = PLAYER_BASE_SPEED;
+    SetCurrentMap(objectDataMap[1], STARTING_ZONE);
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
@@ -92,11 +95,12 @@ int main()
                     objectDataMap[id].objectType = network::ObjectType::PLAYER;
                     objectDataMap[id].attackType = network::AttackType::NONE;
                     objectDataMap[id].projectileType = network::ProjectileType::NONE;
-                    objectDataMap[id].position = glm::vec3( math::RandomFloat(-0.3f, 0.3f), math::RandomFloat(-0.18f, 0.18f), math::RandomFloat(0.11f, 0.5f));
+                    objectDataMap[id].position = glm::vec3( math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.5f), math::RandomFloat(0.11f, 0.5f));
                     objectDataMap[id].velocity = glm::vec3(0.0f);
                     objectDataMap[id].currentAnimation = network::AnimationType::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
                     objectDataMap[id].speed = PLAYER_BASE_SPEED;
+                    SetCurrentMap(objectDataMap[id], STARTING_ZONE);
                     
                     logging::Log(logging::LogType::INFO, "Player %d connected", id);
                     
@@ -151,6 +155,7 @@ int main()
                                 objectDataMap[id].currentAnimation = network::AnimationType::IDLE;
                                 objectDataMap[id].facingDirection = attackerData.facingDirection;
                                 objectDataMap[id].speed = PROJECTILE_SPEED;
+                                SetCurrentMap(objectDataMap[id], GetCurrentMapString(attackerData));
                                 tempObjectTTL[id] = PROJECTILE_TTL;
                                 
                                 switch (attackerData.facingDirection)
