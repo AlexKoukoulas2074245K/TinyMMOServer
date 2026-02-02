@@ -32,6 +32,43 @@ static const std::string STARTING_ZONE = "forest_1";
 
 ///------------------------------------------------------------------------------------------------
 
+// Assumes relevant object types have been set
+void SetColliderData(ObjectData& objectData)
+{
+    switch (objectData.objectType)
+    {
+        case network::ObjectType::PLAYER:
+        {
+            objectData.colliderData.colliderType = network::ColliderType::RECTANGLE;
+            objectData.colliderData.colliderRelativeDimentions = glm::vec2(0.5f, 0.8f);
+        } break;
+        
+        case network::ObjectType::ATTACK:
+        {
+            switch (objectData.attackType)
+            {
+                case network::AttackType::PROJECTILE:
+                {
+                    objectData.colliderData.colliderType = network::ColliderType::CIRCLE;
+                    objectData.colliderData.colliderRelativeDimentions = glm::vec2(1.0f);
+                } break;
+
+                case network::AttackType::NONE:
+                    break;
+                case network::AttackType::MELEE:
+                    break;
+            } break;
+        } break;
+            
+        case network::ObjectType::NPC:
+            break;
+        case network::ObjectType::STATIC:
+            break;
+    }
+}
+
+///------------------------------------------------------------------------------------------------
+
 int main()
 {
     enet_initialize();
@@ -71,6 +108,8 @@ int main()
     objectDataMap[1].currentAnimation = network::AnimationType::RUNNING;
     objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
     objectDataMap[1].speed = PLAYER_BASE_SPEED;
+
+    SetColliderData(objectDataMap[1]);
     SetCurrentMap(objectDataMap[1], STARTING_ZONE);
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
@@ -100,6 +139,8 @@ int main()
                     objectDataMap[id].currentAnimation = network::AnimationType::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
                     objectDataMap[id].speed = PLAYER_BASE_SPEED;
+
+                    SetColliderData(objectDataMap[id]);
                     SetCurrentMap(objectDataMap[id], STARTING_ZONE);
                     
                     logging::Log(logging::LogType::INFO, "Player %d connected", id);
@@ -155,7 +196,10 @@ int main()
                                 objectDataMap[id].currentAnimation = network::AnimationType::IDLE;
                                 objectDataMap[id].facingDirection = attackerData.facingDirection;
                                 objectDataMap[id].speed = PROJECTILE_SPEED;
+                                
+                                SetColliderData(objectDataMap[id]);
                                 SetCurrentMap(objectDataMap[id], GetCurrentMapString(attackerData));
+
                                 tempObjectTTL[id] = PROJECTILE_TTL;
                                 
                                 switch (attackerData.facingDirection)
@@ -224,7 +268,7 @@ int main()
                     tempObjectsToRemove.push_back(objectId);
                 }
             }
-            
+
             for (auto objectIdToRemove: tempObjectsToRemove)
             {
                 ObjectDestroyedMessage objectDestroyedMessage{};
