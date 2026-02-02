@@ -108,6 +108,7 @@ int main()
     objectDataMap[1].currentAnimation = network::AnimationType::RUNNING;
     objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
     objectDataMap[1].speed = PLAYER_BASE_SPEED;
+    objectDataMap[1].objectScale = 0.2f;
 
     SetColliderData(objectDataMap[1]);
     SetCurrentMap(objectDataMap[1], STARTING_ZONE);
@@ -139,6 +140,7 @@ int main()
                     objectDataMap[id].currentAnimation = network::AnimationType::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
                     objectDataMap[id].speed = PLAYER_BASE_SPEED;
+                    objectDataMap[id].objectScale = 0.1f;
 
                     SetColliderData(objectDataMap[id]);
                     SetCurrentMap(objectDataMap[id], STARTING_ZONE);
@@ -196,6 +198,7 @@ int main()
                                 objectDataMap[id].currentAnimation = network::AnimationType::IDLE;
                                 objectDataMap[id].facingDirection = attackerData.facingDirection;
                                 objectDataMap[id].speed = PROJECTILE_SPEED;
+                                objectDataMap[id].objectScale = 0.03f;
                                 
                                 SetColliderData(objectDataMap[id]);
                                 SetCurrentMap(objectDataMap[id], GetCurrentMapString(attackerData));
