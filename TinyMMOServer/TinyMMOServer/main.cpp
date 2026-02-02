@@ -9,14 +9,17 @@
 #include <unordered_map>
 #include <vector>
 
+#include "net_common/Navmap.h"
 #include "net_common/NetworkMessages.h"
 #include "net_common/Version.h"
 
 #include "util/Date.h"
 #include "util/FileUtils.h"
+#include "util/Json.h"
 #include "util/Logging.h"
 #include "util/MathUtils.h"
 #include "util/StringUtils.h"
+#include "util/Lodepng.h"
 
 ///------------------------------------------------------------------------------------------------
 
@@ -24,11 +27,68 @@ using namespace network;
 
 ///------------------------------------------------------------------------------------------------
 
+enum class MapConnectionDirection
+{
+    NORTH = 0,
+    EAST = 1,
+    SOUTH = 2,
+    WEST = 3,
+    MAX = 4
+};
+
+
+using MapConnectionsType = std::array<strutils::StringId, static_cast<size_t>(MapConnectionDirection::MAX)>;
+
+///------------------------------------------------------------------------------------------------
+
+struct MapMetaData
+{
+    glm::vec2 mMapDimensions;
+    glm::vec2 mMapPosition;
+    MapConnectionsType mMapConnections;
+};
+
+///------------------------------------------------------------------------------------------------
+
+static const int NAVMAP_SIZE = 128;
 static const float PROJECTILE_TTL = 3.0f;
 static const float PLAYER_BASE_SPEED = 0.0003f;
-static const float PROJECTILE_SPEED = 0.001f;
+static const float PROJECTILE_SPEED = 0.0005f;
+static const float WORLD_MAP_SCALE = 4.0f;
 
 static const std::string STARTING_ZONE = "forest_1";
+
+static std::unordered_map<strutils::StringId, MapMetaData, strutils::StringIdHasher> sMapMetadata;
+static std::unordered_map<strutils::StringId, network::Navmap, strutils::StringIdHasher> sNavmaps;
+static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapPixels;
+
+///------------------------------------------------------------------------------------------------
+
+void CheckForMapChange(ObjectData& objectData, const strutils::StringId& currentMap, const MapMetaData& currentMapMetaData)
+{
+    strutils::StringId nextMapName;
+    if (objectData.position.x > currentMapMetaData.mMapPosition.x * WORLD_MAP_SCALE + (currentMapMetaData.mMapDimensions.x * WORLD_MAP_SCALE)/2.0f)
+    {
+        nextMapName = currentMapMetaData.mMapConnections[static_cast<int>(MapConnectionDirection::EAST)];
+    }
+    else if (objectData.position.x < currentMapMetaData.mMapPosition.x * WORLD_MAP_SCALE - (currentMapMetaData.mMapDimensions.x * WORLD_MAP_SCALE)/2.0f)
+    {
+        nextMapName = currentMapMetaData.mMapConnections[static_cast<int>(MapConnectionDirection::WEST)];
+    }
+    else if (objectData.position.y > currentMapMetaData.mMapPosition.y * WORLD_MAP_SCALE + (currentMapMetaData.mMapDimensions.y * WORLD_MAP_SCALE)/2.0f)
+    {
+        nextMapName = currentMapMetaData.mMapConnections[static_cast<int>(MapConnectionDirection::NORTH)];
+    }
+    else if (objectData.position.y < currentMapMetaData.mMapPosition.y * WORLD_MAP_SCALE - (currentMapMetaData.mMapDimensions.y * WORLD_MAP_SCALE)/2.0f)
+    {
+        nextMapName = currentMapMetaData.mMapConnections[static_cast<int>(MapConnectionDirection::SOUTH)];
+    }
+    
+    if (!nextMapName.isEmpty() && nextMapName.GetString() != "None")
+    {
+        SetCurrentMap(objectData, nextMapName.GetString());
+    }
+}
 
 ///------------------------------------------------------------------------------------------------
 
@@ -69,8 +129,98 @@ void SetColliderData(ObjectData& objectData)
 
 ///------------------------------------------------------------------------------------------------
 
-int main()
+void LoadMapMetaData(const std::string& assetsDirectory)
 {
+    std::ifstream dataFile(assetsDirectory + "map_global_data.json");
+    if (dataFile.is_open())
+    {
+        std::stringstream buffer;
+        buffer << dataFile.rdbuf();
+        
+        auto globalMapDataJson = nlohmann::json::parse(buffer.str());
+        
+        for (auto mapTransformIter = globalMapDataJson["map_transforms"].begin(); mapTransformIter != globalMapDataJson["map_transforms"].end(); ++mapTransformIter)
+        {
+            auto mapFileName = mapTransformIter.key();
+            auto mapName = mapTransformIter.key().substr(0, mapFileName.find(".json"));
+            auto mapNameId = strutils::StringId(mapName);
+            auto mapPosition = glm::vec2(mapTransformIter.value()["x"].get<float>(), mapTransformIter.value()["y"].get<float>());
+            auto mapDimensions = glm::vec2(mapTransformIter.value()["width"].get<float>(), mapTransformIter.value()["height"].get<float>());
+            
+            MapConnectionsType mapConnections;
+            auto northConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["top"].get<std::string>();
+            auto eastConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["right"].get<std::string>();
+            auto southConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["bottom"].get<std::string>();
+            auto westConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["left"].get<std::string>();
+            
+            mapConnections[static_cast<int>(MapConnectionDirection::NORTH)] = strutils::StringId(northConnectionMapName.substr(0, northConnectionMapName.find(".json")));
+            mapConnections[static_cast<int>(MapConnectionDirection::EAST)]  = strutils::StringId(eastConnectionMapName.substr(0, eastConnectionMapName.find(".json")));
+            mapConnections[static_cast<int>(MapConnectionDirection::SOUTH)] = strutils::StringId(southConnectionMapName.substr(0, southConnectionMapName.find(".json")));
+            mapConnections[static_cast<int>(MapConnectionDirection::WEST)]  = strutils::StringId(westConnectionMapName.substr(0, westConnectionMapName.find(".json")));
+            
+            sMapMetadata.emplace(std::make_pair(mapNameId, MapMetaData{ mapDimensions, mapPosition, std::move(mapConnections)}));
+        }
+    }
+    
+    logging::Log(logging::LogType::INFO, "Loaded MapMetaData for %lu maps.", sMapMetadata.size());
+}
+
+///------------------------------------------------------------------------------------------------
+
+void LoadNavmapData(const std::string& assetsDirectory)
+{
+    auto navmapFilePaths = fileutils::GetAllFilenamesAndFolderNamesInDirectory(assetsDirectory + "navmaps/");
+    
+    for (const auto& navmapFileName: navmapFilePaths)
+    {
+        std::vector<unsigned char> rawPNG;
+        std::vector<unsigned char> navmapPixels;
+        
+        unsigned width, height;
+        lodepng::State state;
+
+        auto error = lodepng::load_file(rawPNG, assetsDirectory + "/navmaps/" + navmapFileName);
+        
+        if (!error)
+        {
+            error = lodepng::decode(navmapPixels, width, height, state, rawPNG);
+        }
+        
+        if(error)
+        {
+            logging::Log(logging::LogType::ERROR, "PNG Loading Error %d: %s", error, lodepng_error_text(error));
+        }
+        else
+        {
+            auto mapName = strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png")));
+            
+            sNavmapPixels.emplace(std::make_pair(mapName, navmapPixels));
+            sNavmaps.emplace(std::make_pair(mapName, network::Navmap(sNavmapPixels.at(mapName).data(), NAVMAP_SIZE)));
+        }
+    }
+    
+    logging::Log(logging::LogType::INFO, "Loaded Navmap data for %lu maps.", sNavmaps.size());
+}
+
+///------------------------------------------------------------------------------------------------
+
+
+int main(int argc, char* argv[])
+{
+    if (argc >= 2)
+    {
+        logging::Log(logging::LogType::INFO, "Initializing server from CWD: %s", argv[0]);
+        logging::Log(logging::LogType::INFO, "Asset Directory: %s", argv[1]);
+    }
+    else
+    {
+        logging::Log(logging::LogType::ERROR, "Asset Directory Not Provided");
+        return -1;
+    }
+    
+    LoadMapMetaData(argv[1]);
+    LoadNavmapData(argv[1]);
+    
     enet_initialize();
     atexit(enet_deinitialize);
 
@@ -116,7 +266,7 @@ int main()
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
     ENetEvent event;
-    const float tickRate = 20.0f;
+    const float tickRate = 40.0f;
     const float tickInterval = 1.0f / tickRate;
     double lastTick = enet_time_get() / 1000.0;
 
@@ -135,7 +285,7 @@ int main()
                     objectDataMap[id].objectType = network::ObjectType::PLAYER;
                     objectDataMap[id].attackType = network::AttackType::NONE;
                     objectDataMap[id].projectileType = network::ProjectileType::NONE;
-                    objectDataMap[id].position = glm::vec3( math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.5f), math::RandomFloat(0.11f, 0.5f));
+                    objectDataMap[id].position = glm::vec3( math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.3f), math::RandomFloat(0.11f, 0.5f));
                     objectDataMap[id].velocity = glm::vec3(0.0f);
                     objectDataMap[id].currentAnimation = network::AnimationType::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
@@ -207,16 +357,19 @@ int main()
                                 
                                 switch (attackerData.facingDirection)
                                 {
-                                    case network::FacingDirection::NORTH_WEST: objectDataMap[id].velocity = glm::vec3(-PROJECTILE_SPEED, PROJECTILE_SPEED, 0.0f); break;
-                                    case network::FacingDirection::NORTH_EAST: objectDataMap[id].velocity = glm::vec3(PROJECTILE_SPEED, PROJECTILE_SPEED, 0.0f); break;
-                                    case network::FacingDirection::SOUTH_WEST: objectDataMap[id].velocity = glm::vec3(-PROJECTILE_SPEED, -PROJECTILE_SPEED, 0.0f); break;
-                                    case network::FacingDirection::SOUTH_EAST: objectDataMap[id].velocity = glm::vec3(PROJECTILE_SPEED, -PROJECTILE_SPEED, 0.0f); break;
-                                    case network::FacingDirection::NORTH: objectDataMap[id].velocity = glm::vec3(0.0f, PROJECTILE_SPEED, 0.0f); break;
-                                    case network::FacingDirection::SOUTH: objectDataMap[id].velocity = glm::vec3(0.0f, -PROJECTILE_SPEED, 0.0f); break;
-                                    case network::FacingDirection::WEST: objectDataMap[id].velocity = glm::vec3(-PROJECTILE_SPEED, 0.0f, 0.0f); break;
-                                    case network::FacingDirection::EAST: objectDataMap[id].velocity = glm::vec3(PROJECTILE_SPEED, 0.0f, 0.0f); break;
+                                    case network::FacingDirection::NORTH_WEST: objectDataMap[id].velocity = glm::vec3(-1.0f, 1.0f, 0.0f); break;
+                                    case network::FacingDirection::NORTH_EAST: objectDataMap[id].velocity = glm::vec3(1.0f, 1.0f, 0.0f); break;
+                                    case network::FacingDirection::SOUTH_WEST: objectDataMap[id].velocity = glm::vec3(-1.0f, -1.0f, 0.0f); break;
+                                    case network::FacingDirection::SOUTH_EAST: objectDataMap[id].velocity = glm::vec3(1.0f, -1.0f, 0.0f); break;
+                                    case network::FacingDirection::NORTH: objectDataMap[id].velocity = glm::vec3(0.0f, 1.0f, 0.0f); break;
+                                    case network::FacingDirection::SOUTH: objectDataMap[id].velocity = glm::vec3(0.0f, -1.0f, 0.0f); break;
+                                    case network::FacingDirection::WEST: objectDataMap[id].velocity = glm::vec3(-1.0f, 0.0f, 0.0f); break;
+                                    case network::FacingDirection::EAST: objectDataMap[id].velocity = glm::vec3(1.0f, 0.0f, 0.0f); break;
                                 }
                                 
+                                objectDataMap[id].velocity = glm::normalize(objectDataMap[id].velocity);
+                                objectDataMap[id].velocity *= objectDataMap[id].speed;
+
                                 ObjectCreatedMessage objectCreatedMessage = {};
                                 objectCreatedMessage.objectData = objectDataMap[id];
                                 
@@ -257,18 +410,34 @@ int main()
 
         if (now - lastTick >= tickInterval)
         {
-            for (auto& [objectId, ttl]: tempObjectTTL)
+            for (auto& [objectId, data] : objectDataMap)
             {
                 auto& objectData = objectDataMap[objectId];
                 if (objectData.objectType == network::ObjectType::ATTACK && objectData.attackType == network::AttackType::PROJECTILE)
                 {
                     objectData.position += objectData.velocity * dtMillis;
-                }
-
-                ttl -= dtMillis / 1000.0f;
-                if (ttl <= 0.0f)
-                {
-                    tempObjectsToRemove.push_back(objectId);
+                    
+                    auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
+                    auto mapPosition = sMapMetadata.at(currentMap).mMapPosition;
+    
+                    auto navmap = sNavmaps.at(currentMap);
+                    if (navmap.GetNavmapTileAt(navmap.GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE)) == network::NavmapTileType::SOLID)
+                    {
+                        tempObjectTTL[objectId] = 0.0f;
+                    }
+                    
+                    CheckForMapChange(objectData, currentMap, sMapMetadata.at(currentMap));
+                    
+                    auto iter = tempObjectTTL.find(objectId);
+                    if (iter != tempObjectTTL.cend())
+                    {
+                        auto& ttl = iter->second;
+                        ttl -= dtMillis / 1000.0f;
+                        if (ttl <= 0.0f)
+                        {
+                            tempObjectsToRemove.push_back(objectId);
+                        }
+                    }
                 }
             }
 
