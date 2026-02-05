@@ -9,17 +9,14 @@
 #include <unordered_map>
 #include <vector>
 
+#include "MapDataRepository.h"
 #include "net_common/Navmap.h"
 #include "net_common/NetworkMessages.h"
 #include "net_common/Version.h"
 
-#include "util/Date.h"
-#include "util/FileUtils.h"
-#include "util/Json.h"
 #include "util/Logging.h"
 #include "util/MathUtils.h"
 #include "util/StringUtils.h"
-#include "util/Lodepng.h"
 
 ///------------------------------------------------------------------------------------------------
 
@@ -27,44 +24,18 @@ using namespace network;
 
 ///------------------------------------------------------------------------------------------------
 
-enum class MapConnectionDirection
-{
-    NORTH = 0,
-    EAST = 1,
-    SOUTH = 2,
-    WEST = 3,
-    MAX = 4
-};
-
-
-using MapConnectionsType = std::array<strutils::StringId, static_cast<size_t>(MapConnectionDirection::MAX)>;
-
-///------------------------------------------------------------------------------------------------
-
-struct MapMetaData
-{
-    glm::vec2 mMapDimensions;
-    glm::vec2 mMapPosition;
-    MapConnectionsType mMapConnections;
-};
-
-///------------------------------------------------------------------------------------------------
-
-static const int NAVMAP_SIZE = 128;
 static const float PROJECTILE_TTL = 3.0f;
 static const float PLAYER_BASE_SPEED = 0.0003f;
 static const float PROJECTILE_SPEED = 0.0005f;
 static const float WORLD_MAP_SCALE = 4.0f;
+static const float FAST_MELEE_CHARGE_TIME_SECS = 0.3f;
+static const float FAST_MELEE_SLASH_TIME_SECS = 0.3f;
 
 static const std::string STARTING_ZONE = "forest_1";
 
-static std::unordered_map<strutils::StringId, MapMetaData, strutils::StringIdHasher> sMapMetadata;
-static std::unordered_map<strutils::StringId, network::Navmap, strutils::StringIdHasher> sNavmaps;
-static std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> sNavmapPixels;
-
 ///------------------------------------------------------------------------------------------------
 
-void CheckForMapChange(ObjectData& objectData, const strutils::StringId& currentMap, const MapMetaData& currentMapMetaData)
+void CheckForMapChange(ObjectData& objectData, const MapMetaData& currentMapMetaData)
 {
     strutils::StringId nextMapName;
     if (objectData.position.x > currentMapMetaData.mMapPosition.x * WORLD_MAP_SCALE + (currentMapMetaData.mMapDimensions.x * WORLD_MAP_SCALE)/2.0f)
@@ -113,9 +84,13 @@ void SetColliderData(ObjectData& objectData)
                     objectData.colliderData.colliderRelativeDimentions = glm::vec2(1.0f);
                 } break;
 
-                case network::AttackType::NONE:
-                    break;
                 case network::AttackType::MELEE:
+                {
+                    objectData.colliderData.colliderType = network::ColliderType::CIRCLE;
+                    objectData.colliderData.colliderRelativeDimentions = glm::vec2(0.8f, 0.8f);
+                } break;
+                    
+                case network::AttackType::NONE:
                     break;
             } break;
         } break;
@@ -127,80 +102,6 @@ void SetColliderData(ObjectData& objectData)
     }
 }
 
-///------------------------------------------------------------------------------------------------
-
-void LoadMapMetaData(const std::string& assetsDirectory)
-{
-    std::ifstream dataFile(assetsDirectory + "map_global_data.json");
-    if (dataFile.is_open())
-    {
-        std::stringstream buffer;
-        buffer << dataFile.rdbuf();
-        
-        auto globalMapDataJson = nlohmann::json::parse(buffer.str());
-        
-        for (auto mapTransformIter = globalMapDataJson["map_transforms"].begin(); mapTransformIter != globalMapDataJson["map_transforms"].end(); ++mapTransformIter)
-        {
-            auto mapFileName = mapTransformIter.key();
-            auto mapName = mapTransformIter.key().substr(0, mapFileName.find(".json"));
-            auto mapNameId = strutils::StringId(mapName);
-            auto mapPosition = glm::vec2(mapTransformIter.value()["x"].get<float>(), mapTransformIter.value()["y"].get<float>());
-            auto mapDimensions = glm::vec2(mapTransformIter.value()["width"].get<float>(), mapTransformIter.value()["height"].get<float>());
-            
-            MapConnectionsType mapConnections;
-            auto northConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["top"].get<std::string>();
-            auto eastConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["right"].get<std::string>();
-            auto southConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["bottom"].get<std::string>();
-            auto westConnectionMapName = globalMapDataJson["map_connections"][mapFileName]["left"].get<std::string>();
-            
-            mapConnections[static_cast<int>(MapConnectionDirection::NORTH)] = strutils::StringId(northConnectionMapName.substr(0, northConnectionMapName.find(".json")));
-            mapConnections[static_cast<int>(MapConnectionDirection::EAST)]  = strutils::StringId(eastConnectionMapName.substr(0, eastConnectionMapName.find(".json")));
-            mapConnections[static_cast<int>(MapConnectionDirection::SOUTH)] = strutils::StringId(southConnectionMapName.substr(0, southConnectionMapName.find(".json")));
-            mapConnections[static_cast<int>(MapConnectionDirection::WEST)]  = strutils::StringId(westConnectionMapName.substr(0, westConnectionMapName.find(".json")));
-            
-            sMapMetadata.emplace(std::make_pair(mapNameId, MapMetaData{ mapDimensions, mapPosition, std::move(mapConnections)}));
-        }
-    }
-    
-    logging::Log(logging::LogType::INFO, "Loaded MapMetaData for %lu maps.", sMapMetadata.size());
-}
-
-///------------------------------------------------------------------------------------------------
-
-void LoadNavmapData(const std::string& assetsDirectory)
-{
-    auto navmapFilePaths = fileutils::GetAllFilenamesAndFolderNamesInDirectory(assetsDirectory + "navmaps/");
-    
-    for (const auto& navmapFileName: navmapFilePaths)
-    {
-        std::vector<unsigned char> rawPNG;
-        std::vector<unsigned char> navmapPixels;
-        
-        unsigned width, height;
-        lodepng::State state;
-
-        auto error = lodepng::load_file(rawPNG, assetsDirectory + "/navmaps/" + navmapFileName);
-        
-        if (!error)
-        {
-            error = lodepng::decode(navmapPixels, width, height, state, rawPNG);
-        }
-        
-        if(error)
-        {
-            logging::Log(logging::LogType::ERROR, "PNG Loading Error %d: %s", error, lodepng_error_text(error));
-        }
-        else
-        {
-            auto mapName = strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png")));
-            
-            sNavmapPixels.emplace(std::make_pair(mapName, navmapPixels));
-            sNavmaps.emplace(std::make_pair(mapName, network::Navmap(sNavmapPixels.at(mapName).data(), NAVMAP_SIZE)));
-        }
-    }
-    
-    logging::Log(logging::LogType::INFO, "Loaded Navmap data for %lu maps.", sNavmaps.size());
-}
 
 ///------------------------------------------------------------------------------------------------
 
@@ -218,8 +119,8 @@ int main(int argc, char* argv[])
         return -1;
     }
     
-    LoadMapMetaData(argv[1]);
-    LoadNavmapData(argv[1]);
+    MapDataRepository mapDataRepo;
+    mapDataRepo.LoadMapData(argv[1]);
     
     enet_initialize();
     atexit(enet_deinitialize);
@@ -243,6 +144,7 @@ int main(int argc, char* argv[])
     
     std::unordered_map<ENetPeer*, objectId_t> peerToPlayerId;
     std::unordered_map<objectId_t, ObjectData> objectDataMap;
+    std::unordered_map<objectId_t, std::pair<ObjectData, float>> pendingObjectsToSpawn;
     std::unordered_map<objectId_t, float> tempObjectTTL;
     std::vector<objectId_t> tempObjectsToRemove;
 
@@ -250,12 +152,13 @@ int main(int argc, char* argv[])
 
     objectDataMap[1] = {};
     objectDataMap[1].objectId = 1;
+    objectDataMap[1].parentObjectId = 1;
     objectDataMap[1].objectType = network::ObjectType::PLAYER;
     objectDataMap[1].attackType = network::AttackType::NONE;
     objectDataMap[1].projectileType = network::ProjectileType::NONE;
     objectDataMap[1].position = glm::vec3(-1.3f, -1.0f, math::RandomFloat(0.11f, 0.5f));
     objectDataMap[1].velocity = glm::vec3(0.0f);
-    objectDataMap[1].currentAnimation = network::AnimationType::RUNNING;
+    objectDataMap[1].objectState = network::ObjectState::RUNNING;
     objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
     objectDataMap[1].speed = PLAYER_BASE_SPEED;
     objectDataMap[1].objectScale = 0.2f;
@@ -280,14 +183,16 @@ int main(int argc, char* argv[])
                 {
                     const auto id = nextId++;
                     peerToPlayerId[event.peer] = id;
+                    
                     objectDataMap[id] = {};
                     objectDataMap[id].objectId = id;
+                    objectDataMap[id].parentObjectId = id;
                     objectDataMap[id].objectType = network::ObjectType::PLAYER;
                     objectDataMap[id].attackType = network::AttackType::NONE;
                     objectDataMap[id].projectileType = network::ProjectileType::NONE;
-                    objectDataMap[id].position = glm::vec3( math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.3f), math::RandomFloat(0.11f, 0.5f));
+                    objectDataMap[id].position = glm::vec3(math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.6f), math::RandomFloat(0.11f, 0.5f));
                     objectDataMap[id].velocity = glm::vec3(0.0f);
-                    objectDataMap[id].currentAnimation = network::AnimationType::RUNNING;
+                    objectDataMap[id].objectState = network::ObjectState::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
                     objectDataMap[id].speed = PLAYER_BASE_SPEED;
                     objectDataMap[id].objectScale = 0.1f;
@@ -330,51 +235,113 @@ int main(int argc, char* argv[])
                             // More checks here probably
                             objectDataMap[playerId] = msg->objectData;
                         }
-                        else if (type == MessageType::AttackMessage)
+                        else if (type == MessageType::CancelAttackMessage)
                         {
-                            auto* msg = reinterpret_cast<AttackMessage*>(data);
+                            auto* msg = reinterpret_cast<CancelAttackMessage*>(data);
+                            // Find and discard respective attack from parentId
+                            for (auto iter = pendingObjectsToSpawn.begin(); iter != pendingObjectsToSpawn.end();)
+                            {
+                                auto& pendingObjectEntry = (*iter).second;
+                                const auto& objectData = pendingObjectEntry.first;
+
+                                if (msg->attackerId == objectData.parentObjectId)
+                                {
+                                    tempObjectTTL.erase(iter->first);
+                                    iter = pendingObjectsToSpawn.erase(iter);
+                                }
+                                else
+                                {
+                                    iter++;
+                                }
+                            }
+                        }
+                        else if (type == MessageType::BeginAttackRequestMessage)
+                        {
+                            auto* msg = reinterpret_cast<BeginAttackRequestMessage*>(data);
                             const auto& attackerData = objectDataMap.at(msg->attackerId);
                             
-                            if (msg->attackType == network::AttackType::PROJECTILE && msg->projectileType == network::ProjectileType::FIREBALL)
+                            BeginAttackResponseMessage responseMessage = {};
+                            responseMessage.allowed = false;
+                            responseMessage.attackType = msg->attackType;
+                            responseMessage.attackerId = msg->attackerId;
+                            responseMessage.chargeDurationSecs = 0.0f;
+                            responseMessage.projectileType = msg->projectileType;
+                            
+                            if (msg->attackType == network::AttackType::MELEE)
                             {
-                                const auto id = nextId++;
-                                objectDataMap[id] = {};
-                                objectDataMap[id].objectId = id;
-                                objectDataMap[id].objectType = network::ObjectType::ATTACK;
-                                objectDataMap[id].attackType = msg->attackType;
-                                objectDataMap[id].projectileType = msg->projectileType;
-                                objectDataMap[id].position = attackerData.position;
-                                objectDataMap[id].position.z -= 0.001f;
-                                objectDataMap[id].currentAnimation = network::AnimationType::IDLE;
-                                objectDataMap[id].facingDirection = attackerData.facingDirection;
-                                objectDataMap[id].speed = PROJECTILE_SPEED;
-                                objectDataMap[id].objectScale = 0.03f;
+                                responseMessage.allowed = true;
+                                responseMessage.chargeDurationSecs = FAST_MELEE_CHARGE_TIME_SECS;
                                 
-                                SetColliderData(objectDataMap[id]);
-                                SetCurrentMap(objectDataMap[id], GetCurrentMapString(attackerData));
-
-                                tempObjectTTL[id] = PROJECTILE_TTL;
+                                const auto id = nextId++;
+                                ObjectData objectData = {};
+                                objectData.objectId = id;
+                                objectData.parentObjectId = attackerData.objectId;
+                                objectData.objectType = network::ObjectType::ATTACK;
+                                objectData.attackType = msg->attackType;
+                                objectData.projectileType = msg->projectileType;
+                                objectData.objectState = network::ObjectState::IDLE;
+                                objectData.facingDirection = attackerData.facingDirection;
+                                objectData.objectScale = 0.125f;
+                                objectData.position = attackerData.position;
                                 
                                 switch (attackerData.facingDirection)
                                 {
-                                    case network::FacingDirection::NORTH_WEST: objectDataMap[id].velocity = glm::vec3(-1.0f, 1.0f, 0.0f); break;
-                                    case network::FacingDirection::NORTH_EAST: objectDataMap[id].velocity = glm::vec3(1.0f, 1.0f, 0.0f); break;
-                                    case network::FacingDirection::SOUTH_WEST: objectDataMap[id].velocity = glm::vec3(-1.0f, -1.0f, 0.0f); break;
-                                    case network::FacingDirection::SOUTH_EAST: objectDataMap[id].velocity = glm::vec3(1.0f, -1.0f, 0.0f); break;
-                                    case network::FacingDirection::NORTH: objectDataMap[id].velocity = glm::vec3(0.0f, 1.0f, 0.0f); break;
-                                    case network::FacingDirection::SOUTH: objectDataMap[id].velocity = glm::vec3(0.0f, -1.0f, 0.0f); break;
-                                    case network::FacingDirection::WEST: objectDataMap[id].velocity = glm::vec3(-1.0f, 0.0f, 0.0f); break;
-                                    case network::FacingDirection::EAST: objectDataMap[id].velocity = glm::vec3(1.0f, 0.0f, 0.0f); break;
+                                    case network::FacingDirection::SOUTH:
+                                    {
+                                        objectData.position.y -= network::MAP_TILE_SIZE * 0.8f;
+                                    } break;
+                                        
+                                    case network::FacingDirection::NORTH:
+                                    {
+                                        objectData.position.y += network::MAP_TILE_SIZE * 0.8f;
+                                    } break;
+                                        
+                                    case network::FacingDirection::WEST:
+                                    {
+                                        objectData.position.x -= network::MAP_TILE_SIZE * 0.5f;
+                                    } break;
+                                        
+                                    case network::FacingDirection::EAST:
+                                    {
+                                        objectData.position.x += network::MAP_TILE_SIZE * 0.5f;
+                                    } break;
+                                        
+                                    case network::FacingDirection::NORTH_WEST:
+                                    {
+                                        objectData.position.x -= network::MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y += network::MAP_TILE_SIZE * 0.6f;
+                                    } break;
+                                        
+                                    case network::FacingDirection::NORTH_EAST:
+                                    {
+                                        objectData.position.x += network::MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y += network::MAP_TILE_SIZE * 0.6f;
+                                    } break;
+                                        
+                                    case network::FacingDirection::SOUTH_WEST:
+                                    {
+                                        objectData.position.x -= network::MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y -= network::MAP_TILE_SIZE * 0.6f;
+                                    } break;
+                                        
+                                    case network::FacingDirection::SOUTH_EAST:
+                                    {
+                                        objectData.position.x += network::MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y -= network::MAP_TILE_SIZE * 0.6f;
+                                    } break;
                                 }
                                 
-                                objectDataMap[id].velocity = glm::normalize(objectDataMap[id].velocity);
-                                objectDataMap[id].velocity *= objectDataMap[id].speed;
-
-                                ObjectCreatedMessage objectCreatedMessage = {};
-                                objectCreatedMessage.objectData = objectDataMap[id];
+                                SetColliderData(objectData);
+                                SetCurrentMap(objectData, GetCurrentMapString(attackerData));
                                 
-                                BroadcastMessage(server, &objectCreatedMessage, sizeof(objectCreatedMessage), channels::RELIABLE);
+                                pendingObjectsToSpawn[id] = std::make_pair(objectData, responseMessage.chargeDurationSecs);
+                                
+                                // Pre-emptively add it to the tempObjects. The timer won't start going down
+                                // until it is properly added to the main objectData container.
+                                tempObjectTTL[id] = FAST_MELEE_SLASH_TIME_SECS;
                             }
+
+                            SendMessage(event.peer, &responseMessage, sizeof(responseMessage), channels::RELIABLE);
                         }
                     }
                     else
@@ -410,23 +377,24 @@ int main(int argc, char* argv[])
 
         if (now - lastTick >= tickInterval)
         {
+            // Main object update loop
             for (auto& [objectId, data] : objectDataMap)
             {
                 auto& objectData = objectDataMap[objectId];
-                if (objectData.objectType == network::ObjectType::ATTACK && objectData.attackType == network::AttackType::PROJECTILE)
+                if (objectData.objectType == network::ObjectType::ATTACK)
                 {
                     objectData.position += objectData.velocity * dtMillis;
                     
                     auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
-                    auto mapPosition = sMapMetadata.at(currentMap).mMapPosition;
+                    auto mapPosition = mapDataRepo.GetMapMetaData().at(currentMap).mMapPosition;
     
-                    auto navmap = sNavmaps.at(currentMap);
+                    auto navmap = mapDataRepo.GetNavmaps().at(currentMap);
                     if (navmap.GetNavmapTileAt(navmap.GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE)) == network::NavmapTileType::SOLID)
                     {
                         tempObjectTTL[objectId] = 0.0f;
                     }
                     
-                    CheckForMapChange(objectData, currentMap, sMapMetadata.at(currentMap));
+                    CheckForMapChange(objectData, mapDataRepo.GetMapMetaData().at(currentMap));
                     
                     auto iter = tempObjectTTL.find(objectId);
                     if (iter != tempObjectTTL.cend())
@@ -440,7 +408,33 @@ int main(int argc, char* argv[])
                     }
                 }
             }
+            
+            // Update and move objects ready to spawn into main object data map
+            for (auto iter = pendingObjectsToSpawn.begin(); iter != pendingObjectsToSpawn.end();)
+            {
+                auto& pendingObjectEntry = (*iter).second;
+                const auto& objectData = pendingObjectEntry.first;
+                float& timeToSpawn = pendingObjectEntry.second;
 
+                timeToSpawn -= dtMillis / 1000.0f;
+                if (timeToSpawn <= 0.0f)
+                {
+                    objectDataMap[objectData.objectId] = objectData;
+                    
+                    ObjectCreatedMessage objectCreatedMessage = {};
+                    objectCreatedMessage.objectData = objectData;
+
+                    BroadcastMessage(server, &objectCreatedMessage, sizeof(objectCreatedMessage), channels::RELIABLE);
+                    
+                    iter = pendingObjectsToSpawn.erase(iter);
+                }
+                else
+                {
+                    iter++;
+                }
+            }
+            
+            // Remove objects whose lifetime is over
             for (auto objectIdToRemove: tempObjectsToRemove)
             {
                 ObjectDestroyedMessage objectDestroyedMessage{};
