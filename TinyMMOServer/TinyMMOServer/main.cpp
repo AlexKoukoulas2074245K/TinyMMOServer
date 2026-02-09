@@ -148,23 +148,26 @@ int main(int argc, char* argv[])
     std::unordered_map<objectId_t, float> tempObjectTTL;
     std::vector<objectId_t> tempObjectsToRemove;
 
-    objectId_t nextId = 2;
+    for (int i = 1; i < 16; ++i)
+    {
+        objectDataMap[i] = {};
+        objectDataMap[i].objectId = i;
+        objectDataMap[i].parentObjectId = i;
+        objectDataMap[i].objectType = network::ObjectType::PLAYER;
+        objectDataMap[i].attackType = network::AttackType::NONE;
+        objectDataMap[i].projectileType = network::ProjectileType::NONE;
+        objectDataMap[i].position = glm::vec3(math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.6f), math::RandomFloat(0.11f, 0.5f));
+        objectDataMap[i].velocity = glm::vec3(0.0f);
+        objectDataMap[i].objectState = network::ObjectState::RUNNING;
+        objectDataMap[i].facingDirection = network::FacingDirection::SOUTH;
+        objectDataMap[i].speed = PLAYER_BASE_SPEED;
+        objectDataMap[i].objectScale = 0.1f;
+        
+        SetColliderData(objectDataMap[i]);
+        SetCurrentMap(objectDataMap[i], STARTING_ZONE);
+    }
+    objectId_t nextId = 16;
 
-    objectDataMap[1] = {};
-    objectDataMap[1].objectId = 1;
-    objectDataMap[1].parentObjectId = 1;
-    objectDataMap[1].objectType = network::ObjectType::PLAYER;
-    objectDataMap[1].attackType = network::AttackType::NONE;
-    objectDataMap[1].projectileType = network::ProjectileType::NONE;
-    objectDataMap[1].position = glm::vec3(-1.3f, -1.0f, math::RandomFloat(0.11f, 0.5f));
-    objectDataMap[1].velocity = glm::vec3(0.0f);
-    objectDataMap[1].objectState = network::ObjectState::RUNNING;
-    objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
-    objectDataMap[1].speed = PLAYER_BASE_SPEED;
-    objectDataMap[1].objectScale = 0.2f;
-
-    SetColliderData(objectDataMap[1]);
-    SetCurrentMap(objectDataMap[1], STARTING_ZONE);
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
