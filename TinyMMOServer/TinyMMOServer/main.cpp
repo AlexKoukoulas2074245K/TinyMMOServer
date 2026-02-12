@@ -24,9 +24,9 @@ using namespace network;
 
 ///------------------------------------------------------------------------------------------------
 
-static const float PROJECTILE_TTL = 3.0f;
+//static const float PROJECTILE_TTL = 3.0f;
 static const float PLAYER_BASE_SPEED = 0.0003f;
-static const float PROJECTILE_SPEED = 0.0005f;
+//static const float PROJECTILE_SPEED = 0.0005f;
 static const float WORLD_MAP_SCALE = 4.0f;
 static const float FAST_MELEE_CHARGE_TIME_SECS = 0.3f;
 static const float FAST_MELEE_SLASH_TIME_SECS = 0.3f;
@@ -238,6 +238,22 @@ int main(int argc, char* argv[])
                             // More checks here probably
                             objectDataMap[playerId] = msg->objectData;
                         }
+                        else if (type == MessageType::DebugGetQuadtreeRequestMessage)
+                        {
+                            auto& quadtree = mapDataRepo.GetMapQuadtree(strutils::StringId(GetCurrentMapString(objectDataMap[playerId])));
+                            const auto& debugRects = quadtree.GetDebugRenderRectangles();
+                            
+                            DebugGetQuadtreeResponseMessage quadtreeDataResponseMessage = {};
+                            quadtreeDataResponseMessage.quadtreeData.debugRectCount = debugRects.size();
+                            
+                            for (int i = 0; i < debugRects.size(); ++i)
+                            {
+                                quadtreeDataResponseMessage.quadtreeData.debugRectPositions[i] = debugRects[i].first;
+                                quadtreeDataResponseMessage.quadtreeData.debugRectDimensions[i] = debugRects[i].second;
+                            }
+
+                            SendMessage(event.peer, &quadtreeDataResponseMessage, sizeof(quadtreeDataResponseMessage), channels::RELIABLE);
+                        }
                         else if (type == MessageType::CancelAttackMessage)
                         {
                             auto* msg = reinterpret_cast<CancelAttackMessage*>(data);
@@ -380,6 +396,12 @@ int main(int argc, char* argv[])
 
         if (now - lastTick >= tickInterval)
         {
+            // Clear Quadtrees
+            for (auto& [mapName, quadtree]: mapDataRepo.GetMapQuadtrees())
+            {
+                quadtree->Clear();
+            }
+            
             // Main object update loop
             for (auto& [objectId, data] : objectDataMap)
             {
@@ -410,6 +432,10 @@ int main(int argc, char* argv[])
                         }
                     }
                 }
+                
+                // Fill quadtrees
+                glm::vec3 colliderDimensions(objectData.colliderData.colliderRelativeDimentions.x * objectData.objectScale, objectData.colliderData.colliderRelativeDimentions.y * objectData.objectScale, 1.0f);
+                mapDataRepo.GetMapQuadtree(strutils::StringId(GetCurrentMapString(objectData))).InsertObject(objectId, objectData.position, colliderDimensions);
             }
             
             // Update and move objects ready to spawn into main object data map

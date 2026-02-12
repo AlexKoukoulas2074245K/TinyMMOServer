@@ -23,6 +23,7 @@ void MapDataRepository::LoadMapData(const std::string& assetsDirectory)
 {
     LoadMapMetaData(assetsDirectory);
     LoadNavmapData(assetsDirectory);
+    CreateQuadtrees();
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -37,6 +38,29 @@ const std::unordered_map<strutils::StringId, MapMetaData, strutils::StringIdHash
 const std::unordered_map<strutils::StringId, network::Navmap, strutils::StringIdHasher>& MapDataRepository::GetNavmaps() const
 {
     return mNavmaps;
+}
+
+///------------------------------------------------------------------------------------------------
+
+const std::unordered_map<strutils::StringId, std::unique_ptr<network::NetworkQuadtree>, strutils::StringIdHasher>& MapDataRepository::GetMapQuadtrees() const
+{
+    return mMapQuadtrees;
+}
+
+///------------------------------------------------------------------------------------------------
+
+const network::NetworkQuadtree& MapDataRepository::GetMapQuadtree(const strutils::StringId& mapName) const
+{
+    assert(mMapQuadtrees.count(mapName));
+    return *mMapQuadtrees.at(mapName);
+}
+
+///------------------------------------------------------------------------------------------------
+
+network::NetworkQuadtree& MapDataRepository::GetMapQuadtree(const strutils::StringId& mapName)
+{
+    assert(mMapQuadtrees.count(mapName));
+    return *mMapQuadtrees.at(mapName);
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -113,3 +137,17 @@ void MapDataRepository::LoadNavmapData(const std::string& assetsDirectory)
     
     logging::Log(logging::LogType::INFO, "Loaded Navmap data for %lu maps.", mNavmaps.size());
 }
+
+///------------------------------------------------------------------------------------------------
+
+void MapDataRepository::CreateQuadtrees()
+{
+    for (const auto& [mapName, mapMetaData]: mMapMetaData)
+    {
+        mMapQuadtrees[mapName] = std::make_unique<network::NetworkQuadtree>(
+            glm::vec3(mapMetaData.mMapPosition.x * network::MAP_GAME_SCALE, mapMetaData.mMapPosition.y * network::MAP_GAME_SCALE, 20.0f),
+            glm::vec3(mapMetaData.mMapDimensions.x * network::MAP_GAME_SCALE, mapMetaData.mMapDimensions.y * network::MAP_GAME_SCALE, 1.0f));
+    }
+}
+
+///------------------------------------------------------------------------------------------------

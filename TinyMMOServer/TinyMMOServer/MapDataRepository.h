@@ -11,6 +11,7 @@
 ///------------------------------------------------------------------------------------------------
 
 #include "net_common/Navmap.h"
+#include "net_common/NetworkQuadtree.h"
 #include "util/MathUtils.h"
 #include "util/StringUtils.h"
 
@@ -49,14 +50,20 @@ public:
     
     const std::unordered_map<strutils::StringId, MapMetaData, strutils::StringIdHasher>& GetMapMetaData() const;
     const std::unordered_map<strutils::StringId, network::Navmap, strutils::StringIdHasher>& GetNavmaps() const;
+    const std::unordered_map<strutils::StringId, std::unique_ptr<network::NetworkQuadtree>, strutils::StringIdHasher>& GetMapQuadtrees() const;
+
+    const network::NetworkQuadtree& GetMapQuadtree(const strutils::StringId& mapName) const;
+    network::NetworkQuadtree& GetMapQuadtree(const strutils::StringId& mapName);
     
 private:
     void LoadNavmapData(const std::string& assetsDirectory);
     void LoadMapMetaData(const std::string& assetsDirectory);
+    void CreateQuadtrees();
     
 public:
     std::unordered_map<strutils::StringId, MapMetaData, strutils::StringIdHasher> mMapMetaData;
     std::unordered_map<strutils::StringId, network::Navmap, strutils::StringIdHasher> mNavmaps;
+    std::unordered_map<strutils::StringId, std::unique_ptr<network::NetworkQuadtree>, strutils::StringIdHasher> mMapQuadtrees;
     std::unordered_map<strutils::StringId, std::vector<unsigned char>, strutils::StringIdHasher> mNavmapPixels;
 };
 
