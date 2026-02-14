@@ -17,6 +17,7 @@
 #include "util/Logging.h"
 #include "util/MathUtils.h"
 #include "util/StringUtils.h"
+#include "util/ThreadSafeQueue.h"
 
 ///------------------------------------------------------------------------------------------------
 
@@ -74,6 +75,12 @@ void SetColliderData(ObjectData& objectData)
             objectData.colliderData.colliderRelativeDimentions = glm::vec2(0.5f, 0.8f);
         } break;
         
+        case network::ObjectType::NPC:
+        {
+            objectData.colliderData.colliderType = network::ColliderType::RECTANGLE;
+            objectData.colliderData.colliderRelativeDimentions = glm::vec2(0.8f, 0.8f);
+        } break;
+
         case network::ObjectType::ATTACK:
         {
             switch (objectData.attackType)
@@ -95,8 +102,6 @@ void SetColliderData(ObjectData& objectData)
             } break;
         } break;
             
-        case network::ObjectType::NPC:
-            break;
         case network::ObjectType::STATIC:
             break;
     }
@@ -144,29 +149,48 @@ int main(int argc, char* argv[])
     
     std::unordered_map<ENetPeer*, objectId_t> peerToPlayerId;
     std::unordered_map<objectId_t, ObjectData> objectDataMap;
+    std::unordered_map<objectId_t, glm::ivec2> npcNextTiles;
     std::unordered_map<objectId_t, std::pair<ObjectData, float>> pendingObjectsToSpawn;
     std::unordered_map<objectId_t, float> tempObjectTTL;
     std::vector<objectId_t> tempObjectsToRemove;
 
-    for (int i = 1; i < 16; ++i)
-    {
-        objectDataMap[i] = {};
-        objectDataMap[i].objectId = i;
-        objectDataMap[i].parentObjectId = i;
-        objectDataMap[i].objectType = network::ObjectType::PLAYER;
-        objectDataMap[i].attackType = network::AttackType::NONE;
-        objectDataMap[i].projectileType = network::ProjectileType::NONE;
-        objectDataMap[i].position = glm::vec3(math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.6f), math::RandomFloat(0.11f, 0.5f));
-        objectDataMap[i].velocity = glm::vec3(0.0f);
-        objectDataMap[i].objectState = network::ObjectState::RUNNING;
-        objectDataMap[i].facingDirection = network::FacingDirection::SOUTH;
-        objectDataMap[i].speed = PLAYER_BASE_SPEED;
-        objectDataMap[i].objectScale = 0.1f;
-        
-        SetColliderData(objectDataMap[i]);
-        SetCurrentMap(objectDataMap[i], STARTING_ZONE);
-    }
-    objectId_t nextId = 16;
+//    for (int i = 1; i < 16; ++i)
+//    {
+//        objectDataMap[i] = {};
+//        objectDataMap[i].objectId = i;
+//        objectDataMap[i].parentObjectId = i;
+//        objectDataMap[i].objectType = network::ObjectType::PLAYER;
+//        objectDataMap[i].attackType = network::AttackType::NONE;
+//        objectDataMap[i].projectileType = network::ProjectileType::NONE;
+//        objectDataMap[i].position = glm::vec3(math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.6f), math::RandomFloat(0.11f, 0.5f));
+//        objectDataMap[i].velocity = glm::vec3(0.0f);
+//        objectDataMap[i].objectState = network::ObjectState::RUNNING;
+//        objectDataMap[i].facingDirection = network::FacingDirection::SOUTH;
+//        objectDataMap[i].speed = PLAYER_BASE_SPEED;
+//        objectDataMap[i].objectScale = 0.1f;
+//        
+//        SetColliderData(objectDataMap[i]);
+//        SetCurrentMap(objectDataMap[i], STARTING_ZONE);
+//    }
+    
+//    objectDataMap[1] = {};
+//    objectDataMap[1].objectId = 1;
+//    objectDataMap[1].parentObjectId = 1;
+//    objectDataMap[1].objectType = network::ObjectType::NPC;
+//    objectDataMap[1].attackType = network::AttackType::NONE;
+//    objectDataMap[1].projectileType = network::ProjectileType::NONE;
+//    objectDataMap[1].position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(65, 65), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, WORLD_MAP_SCALE, 0.5f);
+//    objectDataMap[1].velocity = glm::vec3(0.0f);
+//    objectDataMap[1].objectState = network::ObjectState::IDLE;
+//    objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
+//    objectDataMap[1].objectFaction = network::ObjectFaction::EVIL;
+//    objectDataMap[1].speed = PLAYER_BASE_SPEED/2.0f;
+//    objectDataMap[1].actionTimer = 3.0f;
+//    objectDataMap[1].objectScale = 0.1f;
+//
+//    SetColliderData(objectDataMap[1]);
+//    SetCurrentMap(objectDataMap[1], STARTING_ZONE);
+    objectId_t nextId = 2;
 
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
@@ -193,10 +217,11 @@ int main(int argc, char* argv[])
                     objectDataMap[id].objectType = network::ObjectType::PLAYER;
                     objectDataMap[id].attackType = network::AttackType::NONE;
                     objectDataMap[id].projectileType = network::ProjectileType::NONE;
-                    objectDataMap[id].position = glm::vec3(math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.6f), math::RandomFloat(0.11f, 0.5f));
+                    objectDataMap[id].position =  glm::vec3(math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.6f), math::RandomFloat(0.11f, 0.5f));
                     objectDataMap[id].velocity = glm::vec3(0.0f);
                     objectDataMap[id].objectState = network::ObjectState::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
+                    objectDataMap[id].objectFaction = network::ObjectFaction::GOOD;
                     objectDataMap[id].speed = PLAYER_BASE_SPEED;
                     objectDataMap[id].objectScale = 0.1f;
 
@@ -300,6 +325,7 @@ int main(int argc, char* argv[])
                                 objectData.projectileType = msg->projectileType;
                                 objectData.objectState = network::ObjectState::IDLE;
                                 objectData.facingDirection = attackerData.facingDirection;
+                                objectData.objectFaction = attackerData.objectFaction;
                                 objectData.objectScale = 0.125f;
                                 objectData.position = attackerData.position;
                                 
@@ -406,31 +432,91 @@ int main(int argc, char* argv[])
             for (auto& [objectId, data] : objectDataMap)
             {
                 auto& objectData = objectDataMap[objectId];
-                if (objectData.objectType == network::ObjectType::ATTACK)
+                switch (objectData.objectType)
                 {
-                    objectData.position += objectData.velocity * dtMillis;
-                    
-                    auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
-                    auto mapPosition = mapDataRepo.GetMapMetaData().at(currentMap).mMapPosition;
-    
-                    auto navmap = mapDataRepo.GetNavmaps().at(currentMap);
-                    if (navmap.GetNavmapTileAt(navmap.GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE)) == network::NavmapTileType::SOLID)
+                    case network::ObjectType::ATTACK:
                     {
-                        tempObjectTTL[objectId] = 0.0f;
-                    }
-                    
-                    CheckForMapChange(objectData, mapDataRepo.GetMapMetaData().at(currentMap));
-                    
-                    auto iter = tempObjectTTL.find(objectId);
-                    if (iter != tempObjectTTL.cend())
-                    {
-                        auto& ttl = iter->second;
-                        ttl -= dtMillis / 1000.0f;
-                        if (ttl <= 0.0f)
+                        objectData.position += objectData.velocity * dtMillis;
+                        
+                        auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
+                        auto mapPosition = mapDataRepo.GetMapMetaData().at(currentMap).mMapPosition;
+        
+                        auto navmap = mapDataRepo.GetNavmaps().at(currentMap);
+                        if (navmap.GetNavmapTileAt(navmap.GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE)) == network::NavmapTileType::SOLID)
                         {
-                            tempObjectsToRemove.push_back(objectId);
+                            tempObjectTTL[objectId] = 0.0f;
                         }
-                    }
+                        
+                        CheckForMapChange(objectData, mapDataRepo.GetMapMetaData().at(currentMap));
+                        
+                        auto iter = tempObjectTTL.find(objectId);
+                        if (iter != tempObjectTTL.cend())
+                        {
+                            auto& ttl = iter->second;
+                            ttl -= dtMillis / 1000.0f;
+                            if (ttl <= 0.0f)
+                            {
+                                tempObjectsToRemove.push_back(objectId);
+                            }
+                        }
+                    } break;
+                    
+                    case network::ObjectType::NPC:
+                    {
+                        if (npcNextTiles.count(objectId) == 0)
+                        {
+                            objectData.actionTimer -= dtMillis / 1000.0f;
+                            if (objectData.actionTimer < 0)
+                            {
+                                objectData.actionTimer = 5.0f;
+                                    
+                                auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
+                                auto mapPosition = mapDataRepo.GetMapMetaData().at(currentMap).mMapPosition;
+                                
+                                auto mapCoord = mapDataRepo.GetNavmaps().at(currentMap).GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE);
+                                auto nextDirection = static_cast<network::FacingDirection>(math::RandomInt(0, 7));
+                                glm::vec3 toNextPosition;
+                                
+                                switch (nextDirection)
+                                {
+                                    case network::FacingDirection::SOUTH: toNextPosition = glm::vec3(0.0f, -1.0f, 0.0f); mapCoord.y++; break;
+                                    case network::FacingDirection::NORTH: toNextPosition = glm::vec3(0.0f, 1.0f, 0.0f); mapCoord.y--; break;
+                                    case network::FacingDirection::WEST:  toNextPosition = glm::vec3(-1.0f, 0.0f, 0.0f); mapCoord.x--; break;
+                                    case network::FacingDirection::EAST:  toNextPosition = glm::vec3(1.0f, 0.0f, 0.0f); mapCoord.x++; break;
+                                    case network::FacingDirection::NORTH_WEST: toNextPosition = glm::vec3(-1.0f, 1.0f, 0.0f); mapCoord.x--; mapCoord.y--; break;
+                                    case network::FacingDirection::NORTH_EAST: toNextPosition = glm::vec3(1.0f, 1.0f, 0.0f); mapCoord.x++; mapCoord.y--; break;
+                                    case network::FacingDirection::SOUTH_WEST: toNextPosition = glm::vec3(-1.0f, -1.0f, 0.0f); mapCoord.x--; mapCoord.y++; break;
+                                    case network::FacingDirection::SOUTH_EAST: toNextPosition = glm::vec3(1.0f, -1.0f, 0.0f); mapCoord.x++; mapCoord.y++; break;
+                                }
+                                
+                                if (mapDataRepo.GetNavmaps().at(currentMap).GetNavmapTileAt(mapCoord) == network::NavmapTileType::WALKABLE)
+                                {
+                                    npcNextTiles[objectId] = mapCoord;
+                                    objectData.facingDirection = nextDirection;
+                                    objectData.velocity = glm::normalize(toNextPosition) * objectData.speed;
+                                }
+                            }
+                        }
+                        
+                        objectData.position += objectData.velocity * dtMillis;
+                        auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
+                        auto mapPosition = mapDataRepo.GetMapMetaData().at(currentMap).mMapPosition;
+                        
+                        if (npcNextTiles.count(objectId) != 0)
+                        {
+                            logging::Log(logging::LogType::INFO, "Current: %d, %d   Target: %d,%d", mapDataRepo.GetNavmaps().at(currentMap).GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE).x, mapDataRepo.GetNavmaps().at(currentMap).GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE).y, npcNextTiles.at(objectId).x, npcNextTiles.at(objectId).y);
+                            if (mapDataRepo.GetNavmaps().at(currentMap).GetNavmapCoord(objectData.position, mapPosition, WORLD_MAP_SCALE) == npcNextTiles.at(objectId))
+                            {
+                                npcNextTiles.erase(objectId);
+                                objectData.velocity = glm::vec3(0.0f);
+                            }
+                        }
+                        
+                        CheckForMapChange(objectData, mapDataRepo.GetMapMetaData().at(currentMap));
+                    } break;
+
+                    default:
+                        break;
                 }
                 
                 // Fill quadtrees
@@ -473,6 +559,7 @@ int main(int argc, char* argv[])
                 
                 tempObjectTTL.erase(objectIdToRemove);
                 objectDataMap.erase(objectIdToRemove);
+                npcNextTiles.erase(objectIdToRemove);
             }
             tempObjectsToRemove.clear();
             
