@@ -15,10 +15,6 @@
 
 ///------------------------------------------------------------------------------------------------
 
-static const int NAVMAP_SIZE = 128;
-
-///------------------------------------------------------------------------------------------------
-
 void MapDataRepository::LoadMapData(const std::string& assetsDirectory)
 {
     LoadMapMetaData(assetsDirectory);
@@ -131,7 +127,7 @@ void MapDataRepository::LoadNavmapData(const std::string& assetsDirectory)
             auto mapName = strutils::StringId(navmapFileName.substr(0, navmapFileName.find("_navmap.png")));
             
             mNavmapPixels.emplace(std::make_pair(mapName, navmapPixels));
-            mNavmaps.emplace(std::make_pair(mapName, network::Navmap(mNavmapPixels.at(mapName).data(), NAVMAP_SIZE)));
+            mNavmaps.emplace(std::make_pair(mapName, network::Navmap(mNavmapPixels.at(mapName).data(), network::NAVMAP_SIZE)));
         }
     }
     
