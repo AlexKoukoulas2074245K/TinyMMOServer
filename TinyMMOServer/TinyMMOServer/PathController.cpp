@@ -30,6 +30,13 @@ void PathController::ClearObjectPath(const network::objectId_t objectId)
 
 ///------------------------------------------------------------------------------------------------
 
+void PathController::AddTargetPositionToPath(const network::objectId_t objectId, const glm::vec3& target)
+{
+    mPaths[objectId].push(target);
+}
+
+///------------------------------------------------------------------------------------------------
+
 void PathController::SetObjectTargetPosition(const network::objectId_t objectId, const glm::vec3& target)
 {
     ClearObjectPath(objectId);

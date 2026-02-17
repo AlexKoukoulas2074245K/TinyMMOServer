@@ -163,7 +163,6 @@ int main(int argc, char* argv[])
     SetColliderData(objectDataMap[1]);
     SetCurrentMap(objectDataMap[1], STARTING_ZONE);
     objectId_t nextId = 2;
-
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 

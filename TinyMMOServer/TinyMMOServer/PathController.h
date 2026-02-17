@@ -27,6 +27,7 @@ public:
     std::queue<glm::vec3>& GetPath(const network::objectId_t objectId);
 
     void ClearObjectPath(const network::objectId_t objectId);
+    void AddTargetPositionToPath(const network::objectId_t objectId, const glm::vec3& target);
     void SetObjectTargetPosition(const network::objectId_t objectId, const glm::vec3& target);
     
 private:

@@ -14,7 +14,6 @@
 NetworkObjectUpdater::NetworkObjectUpdater(MapDataRepository& mapDataRepository)
     : mMapDataRepository(mapDataRepository)
 {
-    
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -82,7 +81,8 @@ void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const floa
             {
                 mPathController.ClearObjectPath(objectData.objectId);
             }
-        }        
+        }
+        objectData.facingDirection = network::VecToFacingDirection(vecToTarget);
         
         // Kill path on map change
         if (CheckForMapChange(objectData, mMapDataRepository.GetMapMetaData().at(strutils::StringId(GetCurrentMapString(objectData)))))
