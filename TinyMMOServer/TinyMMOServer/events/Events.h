@@ -27,26 +27,13 @@ class DummyEvent
 
 ///------------------------------------------------------------------------------------------------
 
-class MapChangeEvent
-{
-public:
-    MapChangeEvent(const strutils::StringId& newMapName)
-    : mNewMapName(newMapName)
-    {
-    }
-    
-    const strutils::StringId mNewMapName;
-};
-
-///------------------------------------------------------------------------------------------------
-
 class NetworkObjectCollisionEvent
 {
 public:
     // rhs == 0 signifies collision with solid/geometry
     NetworkObjectCollisionEvent(network::objectId_t lhs, network::objectId_t rhs = 0)
-    : mLhs(lhs)
-    , mRhs(rhs)
+        : mLhs(lhs)
+        , mRhs(rhs)
     {
     }
     
@@ -56,7 +43,23 @@ public:
 
 ///------------------------------------------------------------------------------------------------
 
+class NPCAggroEvent
+{
+public:
+    NPCAggroEvent(network::objectId_t npcObjectId, network::objectId_t targetObjectId)
+        : mNPCObjectId(npcObjectId)
+        , mTargetObjectId(targetObjectId)
+    {
+    }
+    
+    const network::objectId_t mNPCObjectId;
+    const network::objectId_t mTargetObjectId;
+};
+
+///------------------------------------------------------------------------------------------------
+
 }
+
 
 ///------------------------------------------------------------------------------------------------
 

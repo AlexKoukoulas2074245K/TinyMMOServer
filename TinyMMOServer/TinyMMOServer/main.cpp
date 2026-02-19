@@ -151,7 +151,7 @@ int main(int argc, char* argv[])
     objectDataMap[1].objectType = network::ObjectType::NPC;
     objectDataMap[1].attackType = network::AttackType::NONE;
     objectDataMap[1].projectileType = network::ProjectileType::NONE;
-    objectDataMap[1].position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(32, 32), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
+    objectDataMap[1].position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(27, 27), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
     objectDataMap[1].velocity = glm::vec3(0.0f);
     objectDataMap[1].objectState = network::ObjectState::IDLE;
     objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
@@ -188,7 +188,7 @@ int main(int argc, char* argv[])
                     objectDataMap[id].objectType = network::ObjectType::PLAYER;
                     objectDataMap[id].attackType = network::AttackType::NONE;
                     objectDataMap[id].projectileType = network::ProjectileType::NONE;
-                    objectDataMap[id].position =  glm::vec3(math::RandomFloat(-1.5f, -1.1f), math::RandomFloat(-1.4, -0.6f), math::RandomFloat(0.11f, 0.5f));
+                    objectDataMap[id].position =  glm::vec3(-1.0f, -1.0f, math::RandomFloat(0.11f, 0.5f));
                     objectDataMap[id].velocity = glm::vec3(0.0f);
                     objectDataMap[id].objectState = network::ObjectState::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
@@ -424,6 +424,8 @@ int main(int argc, char* argv[])
                 quadtree->Clear();
             }
             
+            netObjectUpdater.PerformPreUpdateSetup(objectDataMap);
+
             // Main object update loop
             for (auto& [objectId, objectData] : objectDataMap)
             {

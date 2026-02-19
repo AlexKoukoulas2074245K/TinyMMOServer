@@ -60,6 +60,7 @@ public:
     
     size_t size() const
     {
+        std::lock_guard<std::mutex> lock(m);
         return q.size();
     }
 
