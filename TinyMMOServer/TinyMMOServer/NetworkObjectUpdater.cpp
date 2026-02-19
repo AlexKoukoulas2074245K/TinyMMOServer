@@ -18,6 +18,27 @@ NetworkObjectUpdater::NetworkObjectUpdater(MapDataRepository& mapDataRepository)
 
 ///------------------------------------------------------------------------------------------------
 
+bool NetworkObjectUpdater::DoesObjectHavePath(const network::objectId_t objectId) const
+{
+    return mPathController.DoesObjectHavePath(objectId);
+}
+
+///------------------------------------------------------------------------------------------------
+
+std::queue<glm::vec3>& NetworkObjectUpdater::GetPath(const network::objectId_t objectId)
+{
+    return mPathController.GetPath(objectId);
+}
+
+///------------------------------------------------------------------------------------------------
+
+const std::queue<glm::vec3>& NetworkObjectUpdater::GetPath(const network::objectId_t objectId) const
+{
+    return mPathController.GetPath(objectId);
+}
+
+///------------------------------------------------------------------------------------------------
+
 void NetworkObjectUpdater::UpdateNetworkObject(network::ObjectData& objectData, const float dtMillis)
 {
     switch (objectData.objectType)

@@ -23,6 +23,13 @@ std::queue<glm::vec3>& PathController::GetPath(const network::objectId_t objectI
 
 ///------------------------------------------------------------------------------------------------
 
+const std::queue<glm::vec3>& PathController::GetPath(const network::objectId_t objectId) const
+{
+    return mPaths.at(objectId);
+}
+
+///------------------------------------------------------------------------------------------------
+
 void PathController::ClearObjectPath(const network::objectId_t objectId)
 {
     mPaths.erase(objectId);

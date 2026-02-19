@@ -25,6 +25,7 @@ public:
     
     bool DoesObjectHavePath(const network::objectId_t objectId) const;
     std::queue<glm::vec3>& GetPath(const network::objectId_t objectId);
+    const std::queue<glm::vec3>& GetPath(const network::objectId_t objectId) const;
 
     void ClearObjectPath(const network::objectId_t objectId);
     void AddTargetPositionToPath(const network::objectId_t objectId, const glm::vec3& target);

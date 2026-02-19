@@ -250,6 +250,31 @@ int main(int argc, char* argv[])
 
                             SendMessage(event.peer, &quadtreeDataResponseMessage, sizeof(quadtreeDataResponseMessage), channels::RELIABLE);
                         }
+                        else if (type == MessageType::DebugGetObjectPathRequestMessage)
+                        {
+                            auto* msg = reinterpret_cast<DebugGetObjectPathRequestMessage*>(data);
+                            
+                            DebugGetObjectPathResponseMessage objectPathResponseMessage = {};
+                            objectPathResponseMessage.objectId = msg->objectId;
+                            objectPathResponseMessage.pathData.debugPathPositionsCount = 0;
+                            
+                            if (netObjectUpdater.DoesObjectHavePath(msg->objectId))
+                            {
+                                //copy of path
+                                auto objectPath = netObjectUpdater.GetPath(msg->objectId);
+                                objectPathResponseMessage.pathData.debugPathPositionsCount = objectPath.size();
+                                
+                                int debugPathIndex = 0;
+                                while (!objectPath.empty())
+                                {
+                                    objectPathResponseMessage.pathData.debugPathPositions[debugPathIndex] = objectPath.front();
+                                    objectPath.pop();
+                                    debugPathIndex++;
+                                }
+                            }
+
+                            SendMessage(event.peer, &objectPathResponseMessage, sizeof(objectPathResponseMessage), channels::UNRELIABLE);
+                        }
                         else if (type == MessageType::CancelAttackMessage)
                         {
                             auto* msg = reinterpret_cast<CancelAttackMessage*>(data);
