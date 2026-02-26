@@ -40,6 +40,7 @@ public:
 private:
     void UpdateAttack(network::ObjectData& objectData, const float dtMillis);
     void UpdateNPC(network::ObjectData& objectData, const float dtMillis);
+    void FindPathToTarget(const network::ObjectData& objectData, const network::objectId_t targetId, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap);
     void UpdateNPCPath(network::ObjectData& objectData, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap);
     network::objectId_t FindValidTarget(network::ObjectData& objectData, const float dtMillis, const strutils::StringId& currentMap, const glm::vec2& mapPosition, const network::Navmap& navmap);
     bool CheckForMapChange(network::ObjectData& objectData, const MapMetaData& currentMapMetaData);

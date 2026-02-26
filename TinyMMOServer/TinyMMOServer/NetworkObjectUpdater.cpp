@@ -13,7 +13,7 @@
 
 static const float AGGRO_RANGE = network::MAP_TILE_SIZE * 4.0f;
 static const float NPC_LOITERING_TIMER_SECS = 5.0f;
-static const float NPC_ATTACK_ANIMATION_TIMER_SECS = 0.5f;
+static const float NPC_ATTACK_ANIMATION_TIMER_SECS = 1.0f;
 static const float NPC_PATH_RECALCULATION_SECS = 0.05f;
 
 ///------------------------------------------------------------------------------------------------
@@ -154,7 +154,7 @@ void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const floa
                     events::EventSystem::GetInstance().DispatchEvent<events::NPCAggroEvent>(objectData.objectId, otherObjectData.objectId);
                     
                     // Find Path to target
-                    mPathController.FindPath(objectData, otherObjectData, mapPosition, navmap);
+                    FindPathToTarget(objectData, newTargetId, dtMillis, mapPosition, navmap);
                 }
                 else if (objectData.actionTimer < 0)
                 {
@@ -204,12 +204,13 @@ void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const floa
                 else if (!network::CollidersIntersect(mTickObjectData->at(mNPCToTargetEntries.at(objectData.objectId).mTargetObjectId), objectData))
                 {
                     objectData.objectState = network::ObjectState::IDLE;
-                    mPathController.FindPath(objectData, mTickObjectData->at(mNPCToTargetEntries.at(objectData.objectId).mTargetObjectId), mapPosition, navmap);
+                    FindPathToTarget(objectData, mNPCToTargetEntries.at(objectData.objectId).mTargetObjectId, dtMillis, mapPosition, navmap);
+                    
                 }
                 else
                 {
                     events::EventSystem::GetInstance().DispatchEvent<events::NPCAttackEvent>(objectData.objectId, network::AttackType::MELEE, network::ProjectileType::NONE);
-                    objectData.actionTimer = NPC_ATTACK_ANIMATION_TIMER_SECS;
+                    objectData.actionTimer += NPC_ATTACK_ANIMATION_TIMER_SECS;
                 }
             }
         } break;
@@ -218,6 +219,22 @@ void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const floa
     }
     
     objectData.actionTimer -= dtMillis / 1000.0f;
+}
+
+///------------------------------------------------------------------------------------------------
+
+void NetworkObjectUpdater::FindPathToTarget(const network::ObjectData& objectData, const network::objectId_t targetId, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap)
+{
+    
+    if (mPathController.IsTargetInLOS(objectData, mTickObjectData->at(targetId), navmap, mapPosition, dtMillis))
+    {
+        const auto& targetPosition = mTickObjectData->at(targetId).position;
+        mPathController.SetObjectTargetPosition(objectData.objectId, glm::vec3(targetPosition.x, targetPosition.y, objectData.position.z));
+    }
+    else
+    {
+        mPathController.FindPath(objectData, mTickObjectData->at(targetId), mapPosition, navmap);
+    }
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -267,7 +284,7 @@ void NetworkObjectUpdater::UpdateNPCPath(network::ObjectData& objectData, const 
             if (npcToTargetIter->second.mPathRecalculationTimer < 0.0f)
             {
                 npcToTargetIter->second.mPathRecalculationTimer += NPC_PATH_RECALCULATION_SECS;
-                mPathController.FindPath(objectData, mTickObjectData->at(npcToTargetIter->second.mTargetObjectId), mapPosition, navmap);
+                FindPathToTarget(objectData, npcToTargetIter->second.mTargetObjectId, dtMillis, mapPosition, navmap);
             }
         }
     }
