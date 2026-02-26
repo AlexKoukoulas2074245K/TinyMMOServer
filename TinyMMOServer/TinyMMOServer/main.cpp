@@ -51,13 +51,13 @@ void SetColliderData(ObjectData& objectData)
         case network::ObjectType::PLAYER:
         {
             objectData.colliderData.colliderType = network::ColliderType::RECTANGLE;
-            objectData.colliderData.colliderRelativeDimentions = glm::vec2(0.5f, 0.8f);
+            objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.5f, 0.8f);
         } break;
         
         case network::ObjectType::NPC:
         {
             objectData.colliderData.colliderType = network::ColliderType::RECTANGLE;
-            objectData.colliderData.colliderRelativeDimentions = glm::vec2(0.8f, 0.8f);
+            objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.7f, 0.7f);
         } break;
 
         case network::ObjectType::ATTACK:
@@ -67,13 +67,13 @@ void SetColliderData(ObjectData& objectData)
                 case network::AttackType::PROJECTILE:
                 {
                     objectData.colliderData.colliderType = network::ColliderType::CIRCLE;
-                    objectData.colliderData.colliderRelativeDimentions = glm::vec2(1.0f);
+                    objectData.colliderData.colliderRelativeDimensions = glm::vec2(1.0f);
                 } break;
 
                 case network::AttackType::MELEE:
                 {
                     objectData.colliderData.colliderType = network::ColliderType::CIRCLE;
-                    objectData.colliderData.colliderRelativeDimentions = glm::vec2(0.8f, 0.8f);
+                    objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.8f, 0.8f);
                 } break;
                     
                 case network::AttackType::NONE:
@@ -88,7 +88,6 @@ void SetColliderData(ObjectData& objectData)
 
 
 ///------------------------------------------------------------------------------------------------
-
 
 int main(int argc, char* argv[])
 {
@@ -145,24 +144,45 @@ int main(int argc, char* argv[])
         }
     });
     
-    objectDataMap[1] = {};
-    objectDataMap[1].objectId = 1;
-    objectDataMap[1].parentObjectId = 1;
-    objectDataMap[1].objectType = network::ObjectType::NPC;
-    objectDataMap[1].attackType = network::AttackType::NONE;
-    objectDataMap[1].projectileType = network::ProjectileType::NONE;
-    objectDataMap[1].position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(27, 27), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
-    objectDataMap[1].velocity = glm::vec3(0.0f);
-    objectDataMap[1].objectState = network::ObjectState::IDLE;
-    objectDataMap[1].facingDirection = network::FacingDirection::SOUTH;
-    objectDataMap[1].objectFaction = network::ObjectFaction::EVIL;
-    objectDataMap[1].speed = PLAYER_BASE_SPEED/2.0f;
-    objectDataMap[1].actionTimer = 3.0f;
-    objectDataMap[1].objectScale = 0.1f;
+    std::unique_ptr<events::IListener> npcAttackEventListener = eventSystem.RegisterForEvent<events::NPCAttackEvent>([&](const events::NPCAttackEvent& event)
+    {
+        NPCAttackMessage npcAttackMessage = {};
+        npcAttackMessage.attackerId = event.mNPCObjectId;
+        npcAttackMessage.attackType = event.mAttackType;
+        npcAttackMessage.projectileType = event.mProjectileType;
+        
+        BroadcastMessage(server, &npcAttackMessage, sizeof(npcAttackMessage), channels::RELIABLE);
+    });
+    
+    auto ObjectDestructionLambda = [&](objectId_t objectId)
+    {
+        events::EventSystem::GetInstance().DispatchEvent<events::ObjectDestroyedEvent>(objectId);
+        objectDataMap.erase(objectId);
+        tempObjectTTLSecs.erase(objectId);
+    };
+    
+    for (int i = 1; i < 2; ++i)
+    {
+        objectDataMap[i] = {};
+        objectDataMap[i].objectId = i;
+        objectDataMap[i].parentObjectId = i;
+        objectDataMap[i].objectType = network::ObjectType::NPC;
+        objectDataMap[i].attackType = network::AttackType::NONE;
+        objectDataMap[i].projectileType = network::ProjectileType::NONE;
+        objectDataMap[i].position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(math::RandomInt(25,30), math::RandomInt(25,30)), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
+        objectDataMap[i].velocity = glm::vec3(0.0f);
+        objectDataMap[i].objectState = network::ObjectState::IDLE;
+        objectDataMap[i].facingDirection = network::FacingDirection::SOUTH;
+        objectDataMap[i].objectFaction = network::ObjectFaction::EVIL;
+        objectDataMap[i].speed = PLAYER_BASE_SPEED;
+        objectDataMap[i].actionTimer = 3.0f;
+        objectDataMap[i].objectScale = 0.1f;
 
-    SetColliderData(objectDataMap[1]);
-    SetCurrentMap(objectDataMap[1], STARTING_ZONE);
-    objectId_t nextId = 2;
+        SetColliderData(objectDataMap[i]);
+        SetCurrentMap(objectDataMap[i], STARTING_ZONE);
+    }
+    
+    objectId_t nextId = objectDataMap.size() + 1;
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
@@ -398,8 +418,10 @@ int main(int argc, char* argv[])
                 case ENET_EVENT_TYPE_DISCONNECT:
                 {
                     objectId_t id = peerToPlayerId[event.peer];
-                    objectDataMap.erase(id);
                     peerToPlayerId.erase(event.peer);
+                    
+                    ObjectDestructionLambda(id);
+
                     logging::Log(logging::LogType::INFO, "Player %d disconnected.", id);
                     
                     PlayerDisconnectedMessage playerDCed = {};
@@ -443,7 +465,7 @@ int main(int argc, char* argv[])
                 }
                 
                 // Fill quadtrees
-                glm::vec3 colliderDimensions(objectData.colliderData.colliderRelativeDimentions.x * objectData.objectScale, objectData.colliderData.colliderRelativeDimentions.y * objectData.objectScale, 1.0f);
+                glm::vec3 colliderDimensions(objectData.colliderData.colliderRelativeDimensions.x * objectData.objectScale, objectData.colliderData.colliderRelativeDimensions.y * objectData.objectScale, 1.0f);
                 mapDataRepo.GetMapQuadtree(strutils::StringId(GetCurrentMapString(objectData))).InsertObject(objectId, objectData.position, colliderDimensions);
             }
             
@@ -480,8 +502,7 @@ int main(int argc, char* argv[])
                 
                 BroadcastMessage(server, &objectDestroyedMessage, sizeof(objectDestroyedMessage), channels::RELIABLE);
                 
-                tempObjectTTLSecs.erase(objectIdToRemove);
-                objectDataMap.erase(objectIdToRemove);
+                ObjectDestructionLambda(objectIdToRemove);
             }
             tempObjectsToRemove.clear();
             

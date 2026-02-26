@@ -58,6 +58,34 @@ public:
 
 ///------------------------------------------------------------------------------------------------
 
+class NPCAttackEvent
+{
+public:
+    NPCAttackEvent(network::objectId_t npcObjectId, network::AttackType attackType, network::ProjectileType projectileType)
+        : mNPCObjectId(npcObjectId)
+        , mAttackType(attackType)
+        , mProjectileType(projectileType)
+    {
+    }
+    
+    const network::objectId_t mNPCObjectId;
+    const network::AttackType mAttackType;
+    const network::ProjectileType mProjectileType;
+};
+
+///------------------------------------------------------------------------------------------------
+
+class ObjectDestroyedEvent
+{
+public:
+    ObjectDestroyedEvent(const network::objectId_t objectId)
+        : mObjectId(objectId) {}
+
+    const network::objectId_t mObjectId;
+};
+
+///------------------------------------------------------------------------------------------------
+
 }
 
 

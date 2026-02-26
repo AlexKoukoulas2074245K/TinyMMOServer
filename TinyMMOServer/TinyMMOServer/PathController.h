@@ -25,7 +25,7 @@ namespace network { class Navmap; }
 class PathController final
 {
 public:
-    PathController() = default;
+    PathController();
     
     bool DoesObjectHavePath(const network::objectId_t objectId) const;
     std::queue<glm::vec3>& GetPath(const network::objectId_t objectId);
@@ -89,7 +89,7 @@ private:
 private:
     ThreadSafeQueue<PathFindingTask> mPathFindingTasks;
     ThreadSafeQueue<PathFindingResult> mPathFindingResults;
-    std::unique_ptr<PathFindingWorker> mPathFindingWorker;
+    std::vector<std::unique_ptr<PathFindingWorker>> mPathFindingWorkers;
     std::unordered_map<network::objectId_t, std::queue<glm::vec3>> mPaths;
 };
 

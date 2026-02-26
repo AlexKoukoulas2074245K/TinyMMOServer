@@ -91,6 +91,11 @@ PathController::PathFindingResult PathController::PathFindingWorker::FindPath(co
     const auto& startCoord = pathFindingTask.mNavmap.GetNavmapCoord(pathFindingTask.mStartPosition, pathFindingTask.mMapPosition, network::MAP_GAME_SCALE);
     const auto& endCoord = pathFindingTask.mNavmap.GetNavmapCoord(pathFindingTask.mTargetPosition, pathFindingTask.mMapPosition, network::MAP_GAME_SCALE);
     
+    if (startCoord == endCoord)
+    {
+        return PathController::PathFindingResult(pathFindingTask.mObjectId, resultPath);
+    }
+    
     auto beginTp = std::chrono::high_resolution_clock::now();
     
     openSet = {};
@@ -136,13 +141,18 @@ PathController::PathFindingResult PathController::PathFindingWorker::FindPath(co
             Node* node = current;
             while (node != nullptr)
             {
-                resultPathVec.push_back(pathFindingTask.mNavmap.GetMapPositionFromNavmapCoord(glm::ivec2(node->col, node->row), pathFindingTask.mMapPosition, network::MAP_GAME_SCALE, pathFindingTask.mStartPosition.z));
+                if (node->col != startCoord.x || node->row != startCoord.y)
+                {
+                    resultPathVec.push_back(pathFindingTask.mNavmap.GetMapPositionFromNavmapCoord(glm::ivec2(node->col, node->row), pathFindingTask.mMapPosition, network::MAP_GAME_SCALE, pathFindingTask.mStartPosition.z));
+                }
+                
                 node = node->parent;
             }
             break;
         }
 
-        static const int directions[8][2] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1} };
+//        static const int directions[8][2] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1} };
+        static const int directions[4][2] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0} };
         for (const auto& dir : directions) {
             int newRow = current->row + dir[0];
             int newCol = current->col + dir[1];
@@ -194,6 +204,17 @@ void PathController::PathFindingWorker::StartWorker()
 
 ///------------------------------------------------------------------------------------------------
 
+PathController::PathController()
+{
+    for (int i = 0; i < PATH_FINDING_WORKER_COUNT; ++i)
+    {
+        mPathFindingWorkers.emplace_back(std::make_unique<PathFindingWorker>(mPathFindingTasks, mPathFindingResults));
+        mPathFindingWorkers.back()->StartWorker();
+    }
+}
+
+///------------------------------------------------------------------------------------------------
+
 bool PathController::DoesObjectHavePath(const network::objectId_t objectId) const
 {
     return mPaths.count(objectId) != 0;
@@ -217,16 +238,14 @@ const std::queue<glm::vec3>& PathController::GetPath(const network::objectId_t o
 
 void PathController::Update()
 {
-    if (!mPathFindingWorker)
-    {
-        mPathFindingWorker = std::make_unique<PathController::PathFindingWorker>(mPathFindingTasks, mPathFindingResults);
-        mPathFindingWorker->StartWorker();
-    }
-
     while (mPathFindingResults.size())
     {
         auto&& pathFindingResult = mPathFindingResults.dequeue();
-        mPaths[pathFindingResult.mObjectId] = pathFindingResult.mPath;
+        
+        if (pathFindingResult.mPath.size() > 0)
+        {
+            mPaths[pathFindingResult.mObjectId] = pathFindingResult.mPath;
+        }
     }
 }
 

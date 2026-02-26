@@ -8,17 +8,20 @@
 #include "NetworkObjectUpdater.h"
 #include "MapDataRepository.h"
 #include "events/EventSystem.h"
-#include "net_common/Navmap.h"
 
 ///------------------------------------------------------------------------------------------------
 
-static const float AGGRO_RANGE = network::MAP_TILE_SIZE * 8.0f;
+static const float AGGRO_RANGE = network::MAP_TILE_SIZE * 4.0f;
+static const float NPC_LOITERING_TIMER_SECS = 5.0f;
+static const float NPC_ATTACK_ANIMATION_TIMER_SECS = 0.5f;
+static const float NPC_PATH_RECALCULATION_SECS = 0.05f;
 
 ///------------------------------------------------------------------------------------------------
 
 NetworkObjectUpdater::NetworkObjectUpdater(MapDataRepository& mapDataRepository)
     : mMapDataRepository(mapDataRepository)
 {
+    events::EventSystem::GetInstance().RegisterForEvent<events::ObjectDestroyedEvent>(this, &NetworkObjectUpdater::OnObjectDestroyedEvent);
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -40,6 +43,25 @@ std::queue<glm::vec3>& NetworkObjectUpdater::GetPath(const network::objectId_t o
 const std::queue<glm::vec3>& NetworkObjectUpdater::GetPath(const network::objectId_t objectId) const
 {
     return mPathController.GetPath(objectId);
+}
+
+///------------------------------------------------------------------------------------------------
+
+void NetworkObjectUpdater::OnObjectDestroyedEvent(const events::ObjectDestroyedEvent &objectDestroyedEvent)
+{
+    mPathController.ClearObjectPath(objectDestroyedEvent.mObjectId);
+    mNPCToTargetEntries.erase(objectDestroyedEvent.mObjectId);
+    for (auto iter = mNPCToTargetEntries.begin(); iter != mNPCToTargetEntries.end();)
+    {
+        if (iter->second.mTargetObjectId == objectDestroyedEvent.mObjectId)
+        {
+            iter = mNPCToTargetEntries.erase(iter);
+        }
+        else
+        {
+            iter++;
+        }
+    }
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -99,107 +121,45 @@ void NetworkObjectUpdater::UpdateAttack(network::ObjectData& objectData, const f
 
 void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const float dtMillis)
 {
-    // Path update
-    if (mPathController.DoesObjectHavePath(objectData.objectId))
-    {
-        auto& path = mPathController.GetPath(objectData.objectId);
-        auto vecToTarget = path.front() - objectData.position;
-        float distance = glm::length(vecToTarget);
-        float step = objectData.speed * dtMillis;
-        
-        if (distance > step)
-        {
-            objectData.velocity = glm::normalize(vecToTarget) * step;
-            objectData.position += objectData.velocity;
-        }
-        else
-        {
-            objectData.position = path.front();
-            objectData.velocity = glm::vec3(0.0f);
-            
-            path.pop();
-            if (path.empty())
-            {
-                mPathController.ClearObjectPath(objectData.objectId);
-                objectData.objectState = network::ObjectState::IDLE;
-            }
-        }
-        objectData.facingDirection = network::VecToFacingDirection(vecToTarget);
-        
-        // Kill path on map change
-        if (CheckForMapChange(objectData, mMapDataRepository.GetMapMetaData().at(strutils::StringId(GetCurrentMapString(objectData)))))
-        {
-            mPathController.ClearObjectPath(objectData.objectId);
-        }
-    }
-    // Pathless update
-    else
-    {
-        auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
-        auto mapPosition = mMapDataRepository.GetMapMetaData().at(currentMap).mMapPosition;
-        auto& navmap = mMapDataRepository.GetNavmaps().at(currentMap);
+    auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
+    auto mapPosition = mMapDataRepository.GetMapMetaData().at(currentMap).mMapPosition;
+    auto& navmap = mMapDataRepository.GetNavmaps().at(currentMap);
+    objectData.velocity = glm::vec3(0.0f);
 
-        switch (objectData.objectState)
+   
+    switch (objectData.objectState)
+    {
+        // Not chasing any player
+        case network::ObjectState::IDLE:
         {
-            // Not chasing any player
-            case network::ObjectState::IDLE:
+            if (mPathController.DoesObjectHavePath(objectData.objectId))
             {
-                // Aggro check
-                const auto& objectIdsInCurrentMap = mObjectIdsPerMap.at(currentMap);
-                for (const auto id: objectIdsInCurrentMap)
+                UpdateNPCPath(objectData, dtMillis, mapPosition, navmap);
+            }
+            else
+            {
+                auto newTargetId = FindValidTarget(objectData, dtMillis, currentMap, mapPosition, navmap);
+                if (newTargetId)
                 {
-                    // Identity check
-                    if (id == objectData.objectId)
-                    {
-                        continue;
-                    }
+                    mNPCToTargetEntries[objectData.objectId] = {newTargetId, NPC_PATH_RECALCULATION_SECS};
                     
-                    // Neutrality check
-                    if (objectData.objectFaction == network::ObjectFaction::NEUTRAL)
-                    {
-                        continue;
-                    }
+                    assert(mTickObjectData->count(newTargetId));
+                    const auto& otherObjectData = mTickObjectData->at(newTargetId);
                     
-                    const auto& otherObjectData = mTickObjectData->at(id);
-                    
-                    // Object type check
-                    if (otherObjectData.objectType != network::ObjectType::PLAYER && otherObjectData.objectType != network::ObjectType::NPC)
-                    {
-                        continue;
-                    }
-                    
-                    // Object faction check
-                    if (objectData.objectFaction == otherObjectData.objectFaction)
-                    {
-                        continue;
-                    }
-                    
-                    // Range check
-                    if (glm::distance(objectData.position, glm::vec3(otherObjectData.position.x, otherObjectData.position.y, objectData.position.z)) > AGGRO_RANGE)
-                    {
-                        continue;
-                    }
-                    
-                    // LOS check
-                    if (!mPathController.IsTargetInLOS(objectData, otherObjectData, navmap, mapPosition, dtMillis))
-                    {
-                        continue;
-                    }
-                    
+                    // Face target
                     auto direction = glm::normalize(glm::vec3(otherObjectData.position.x, otherObjectData.position.y, objectData.position.z) - objectData.position);
                     objectData.facingDirection = network::VecToFacingDirection(direction);
-                    objectData.objectState = network::ObjectState::RUNNING;
                     
+                    // Fire Aggro event
                     events::EventSystem::GetInstance().DispatchEvent<events::NPCAggroEvent>(objectData.objectId, otherObjectData.objectId);
                     
+                    // Find Path to target
                     mPathController.FindPath(objectData, otherObjectData, mapPosition, navmap);
                 }
-                
-                objectData.actionTimer -= dtMillis / 1000.0f;
-                if (objectData.actionTimer < 0)
+                else if (objectData.actionTimer < 0)
                 {
-                    objectData.actionTimer = 5.0f;
-                        
+                    // This is a loitering around timer;
+                    objectData.actionTimer = NPC_LOITERING_TIMER_SECS;
                     auto mapCoord = navmap.GetNavmapCoord(objectData.position, mapPosition, network::MAP_GAME_SCALE);
                     auto nextDirection = static_cast<network::FacingDirection>(math::RandomInt(0, 7));
                     glm::vec3 toNextPosition;
@@ -224,18 +184,151 @@ void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const floa
                         objectData.facingDirection = nextDirection;
                     }
                 }
-            } break;
-                
-            // Chasing player
-            case network::ObjectState::RUNNING:
+            }
+        } break;
+            
+        // Chasing player
+        case network::ObjectState::RUNNING:
+        {
+            objectData.objectState = network::ObjectState::IDLE;
+        } break;
+
+        case network::ObjectState::MELEE_ATTACK:
+        {
+            if (objectData.actionTimer < 0)
             {
+                if (!mNPCToTargetEntries.count(objectData.objectId))
+                {
+                    objectData.objectState = network::ObjectState::IDLE;
+                }
+                else if (!network::CollidersIntersect(mTickObjectData->at(mNPCToTargetEntries.at(objectData.objectId).mTargetObjectId), objectData))
+                {
+                    objectData.objectState = network::ObjectState::IDLE;
+                    mPathController.FindPath(objectData, mTickObjectData->at(mNPCToTargetEntries.at(objectData.objectId).mTargetObjectId), mapPosition, navmap);
+                }
+                else
+                {
+                    events::EventSystem::GetInstance().DispatchEvent<events::NPCAttackEvent>(objectData.objectId, network::AttackType::MELEE, network::ProjectileType::NONE);
+                    objectData.actionTimer = NPC_ATTACK_ANIMATION_TIMER_SECS;
+                }
+            }
+        } break;
+        
+        default: break;
+    }
+    
+    objectData.actionTimer -= dtMillis / 1000.0f;
+}
+
+///------------------------------------------------------------------------------------------------
+
+void NetworkObjectUpdater::UpdateNPCPath(network::ObjectData& objectData, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap)
+{
+    auto npcToTargetIter = mNPCToTargetEntries.find(objectData.objectId);
+    auto& path = mPathController.GetPath(objectData.objectId);
+    auto vecToTarget = path.front() - objectData.position;
+    float distance = glm::length(vecToTarget);
+    float step = objectData.speed * dtMillis;
             
-            
-            } break;
-                
-            default: break;
+    if (distance > step)
+    {
+        objectData.velocity = glm::normalize(vecToTarget) * step;
+        objectData.position += objectData.velocity;
+    }
+    else
+    {
+        objectData.position = path.front();
+        objectData.velocity = glm::vec3(0.0f);
+        
+        path.pop();
+        if (path.empty())
+        {
+            mPathController.ClearObjectPath(objectData.objectId);
+            objectData.objectState = network::ObjectState::IDLE;
         }
     }
+    objectData.facingDirection = network::VecToFacingDirection(vecToTarget);
+    
+    // If it is pursuing, recalculate path
+    if (npcToTargetIter != mNPCToTargetEntries.end())
+    {
+        // Can attack
+        if (objectData.actionTimer < 0.0f && mTickObjectData->count(npcToTargetIter->second.mTargetObjectId) && network::CollidersIntersect(mTickObjectData->at(npcToTargetIter->second.mTargetObjectId), objectData))
+        {
+            // This is now an attack animation timer
+            events::EventSystem::GetInstance().DispatchEvent<events::NPCAttackEvent>(objectData.objectId, network::AttackType::MELEE, network::ProjectileType::NONE);
+            objectData.actionTimer = NPC_ATTACK_ANIMATION_TIMER_SECS;
+            objectData.objectState = network::ObjectState::MELEE_ATTACK;
+            mPathController.ClearObjectPath(objectData.objectId);
+        }
+        else
+        {
+            npcToTargetIter->second.mPathRecalculationTimer -= dtMillis/1000.0f;
+            if (npcToTargetIter->second.mPathRecalculationTimer < 0.0f)
+            {
+                npcToTargetIter->second.mPathRecalculationTimer += NPC_PATH_RECALCULATION_SECS;
+                mPathController.FindPath(objectData, mTickObjectData->at(npcToTargetIter->second.mTargetObjectId), mapPosition, navmap);
+            }
+        }
+    }
+    
+    // Kill path on map change
+    if (CheckForMapChange(objectData, mMapDataRepository.GetMapMetaData().at(strutils::StringId(GetCurrentMapString(objectData)))))
+    {
+        mPathController.ClearObjectPath(objectData.objectId);
+    }
+}
+
+///------------------------------------------------------------------------------------------------
+
+network::objectId_t NetworkObjectUpdater::FindValidTarget(network::ObjectData& objectData, const float dtMillis, const strutils::StringId& currentMap, const glm::vec2& mapPosition, const network::Navmap& navmap)
+{
+    // Aggro check
+    const auto& objectIdsInCurrentMap = mObjectIdsPerMap.at(currentMap);
+    for (const auto id: objectIdsInCurrentMap)
+    {
+        // Identity check
+        if (id == objectData.objectId)
+        {
+            continue;
+        }
+        
+        // Neutrality check
+        if (objectData.objectFaction == network::ObjectFaction::NEUTRAL)
+        {
+            continue;
+        }
+        
+        const auto& otherObjectData = mTickObjectData->at(id);
+        
+        // Object type check
+        if (otherObjectData.objectType != network::ObjectType::PLAYER && otherObjectData.objectType != network::ObjectType::NPC)
+        {
+            continue;
+        }
+        
+        // Object faction check
+        if (objectData.objectFaction == otherObjectData.objectFaction)
+        {
+            continue;
+        }
+        
+        // Range check
+        if (glm::distance(objectData.position, glm::vec3(otherObjectData.position.x, otherObjectData.position.y, objectData.position.z)) > AGGRO_RANGE)
+        {
+            continue;
+        }
+        
+        // LOS check
+        if (!mPathController.IsTargetInLOS(objectData, otherObjectData, navmap, mapPosition, dtMillis))
+        {
+            continue;
+        }
+        
+        return id;
+    }
+    
+    return 0;
 }
 
 ///------------------------------------------------------------------------------------------------
@@ -269,3 +362,4 @@ bool NetworkObjectUpdater::CheckForMapChange(network::ObjectData& objectData, co
 }
 
 ///------------------------------------------------------------------------------------------------
+
