@@ -57,7 +57,7 @@ void SetColliderData(ObjectData& objectData)
         case network::ObjectType::NPC:
         {
             objectData.colliderData.colliderType = network::ColliderType::RECTANGLE;
-            objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.7f, 0.7f);
+            objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.5f, 0.5f);
         } break;
 
         case network::ObjectType::ATTACK:
@@ -161,7 +161,7 @@ int main(int argc, char* argv[])
         tempObjectTTLSecs.erase(objectId);
     };
     
-    for (int i = 1; i < 2; ++i)
+    for (int i = 1; i < 8; ++i)
     {
         objectDataMap[i] = {};
         objectDataMap[i].objectId = i;
@@ -170,6 +170,7 @@ int main(int argc, char* argv[])
         objectDataMap[i].attackType = network::AttackType::NONE;
         objectDataMap[i].projectileType = network::ProjectileType::NONE;
         objectDataMap[i].position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(math::RandomInt(25,30), math::RandomInt(25,30)), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
+        objectDataMap[i].position.z = math::RandomFloat(0.4f, 0.5f);
         objectDataMap[i].velocity = glm::vec3(0.0f);
         objectDataMap[i].objectState = network::ObjectState::IDLE;
         objectDataMap[i].facingDirection = network::FacingDirection::SOUTH;
@@ -253,6 +254,11 @@ int main(int argc, char* argv[])
                             
                             // More checks here probably
                             objectDataMap[playerId] = msg->objectData;
+                        }
+                        else if (type == MessageType::DebugSetSwarmParams)
+                        {
+                            auto* msg = reinterpret_cast<DebugSetSwarmParams*>(data);
+                            netObjectUpdater.SetSwarmParams(msg->separationDistance, msg->separationWeight);
                         }
                         else if (type == MessageType::DebugGetQuadtreeRequestMessage)
                         {
@@ -468,7 +474,7 @@ int main(int argc, char* argv[])
                 glm::vec3 colliderDimensions(objectData.colliderData.colliderRelativeDimensions.x * objectData.objectScale, objectData.colliderData.colliderRelativeDimensions.y * objectData.objectScale, 1.0f);
                 mapDataRepo.GetMapQuadtree(strutils::StringId(GetCurrentMapString(objectData))).InsertObject(objectId, objectData.position, colliderDimensions);
             }
-            
+                 
             // Update and move objects ready to spawn into main object data map
             for (auto iter = pendingObjectsToSpawn.begin(); iter != pendingObjectsToSpawn.end();)
             {

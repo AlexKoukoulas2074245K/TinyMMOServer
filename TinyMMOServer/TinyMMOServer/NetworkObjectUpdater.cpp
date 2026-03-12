@@ -8,6 +8,7 @@
 #include "NetworkObjectUpdater.h"
 #include "MapDataRepository.h"
 #include "events/EventSystem.h"
+#include "util/Logging.h"
 
 ///------------------------------------------------------------------------------------------------
 
@@ -15,11 +16,15 @@ static const float AGGRO_RANGE = network::MAP_TILE_SIZE * 4.0f;
 static const float NPC_LOITERING_TIMER_SECS = 5.0f;
 static const float NPC_ATTACK_ANIMATION_TIMER_SECS = 1.0f;
 static const float NPC_PATH_RECALCULATION_SECS = 0.05f;
+static const float NPC_SEPARATION_DISTANCE = 0.04f;
+static const float NPC_SEPARATION_WEIGHT = 0.5f;
 
 ///------------------------------------------------------------------------------------------------
 
 NetworkObjectUpdater::NetworkObjectUpdater(MapDataRepository& mapDataRepository)
     : mMapDataRepository(mapDataRepository)
+    , mSeparationDistance(NPC_SEPARATION_DISTANCE)
+    , mSeparationWeight(NPC_SEPARATION_WEIGHT)
 {
     events::EventSystem::GetInstance().RegisterForEvent<events::ObjectDestroyedEvent>(this, &NetworkObjectUpdater::OnObjectDestroyedEvent);
 }
@@ -119,13 +124,24 @@ void NetworkObjectUpdater::UpdateAttack(network::ObjectData& objectData, const f
 
 ///------------------------------------------------------------------------------------------------
 
+void NetworkObjectUpdater::SetSwarmParams(const float separationDistance, const float separationWeight)
+{
+    mSeparationDistance = separationDistance;
+    mSeparationWeight = separationWeight;
+}
+
+///------------------------------------------------------------------------------------------------
+
 void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const float dtMillis)
 {
     auto currentMap = strutils::StringId(GetCurrentMapString(objectData));
     auto mapPosition = mMapDataRepository.GetMapMetaData().at(currentMap).mMapPosition;
     auto& navmap = mMapDataRepository.GetNavmaps().at(currentMap);
-    objectData.velocity = glm::vec3(0.0f);
-
+    
+    if (objectData.objectState != network::ObjectState::IDLE || !mPathController.DoesObjectHavePath(objectData.objectId))
+    {
+        objectData.velocity = glm::vec3(0.0f);
+    }
    
     switch (objectData.objectState)
     {
@@ -134,7 +150,7 @@ void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const floa
         {
             if (mPathController.DoesObjectHavePath(objectData.objectId))
             {
-                UpdateNPCPath(objectData, dtMillis, mapPosition, navmap);
+                UpdateNPCPath(objectData, dtMillis, mapPosition, navmap, currentMap);
             }
             else
             {
@@ -239,17 +255,53 @@ void NetworkObjectUpdater::FindPathToTarget(const network::ObjectData& objectDat
 
 ///------------------------------------------------------------------------------------------------
 
-void NetworkObjectUpdater::UpdateNPCPath(network::ObjectData& objectData, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap)
+void NetworkObjectUpdater::UpdateNPCPath(network::ObjectData& objectData, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap, const strutils::StringId& currentMap)
 {
     auto npcToTargetIter = mNPCToTargetEntries.find(objectData.objectId);
     auto& path = mPathController.GetPath(objectData.objectId);
     auto vecToTarget = path.front() - objectData.position;
     float distance = glm::length(vecToTarget);
     float step = objectData.speed * dtMillis;
-            
+
     if (distance > step)
     {
-        objectData.velocity = glm::normalize(vecToTarget) * step;
+        const auto& collisionCandidates = mMapDataRepository.GetMapQuadtree(currentMap).GetCollisionCandidates(objectData);
+        glm::vec3 separation(0.0f);
+
+        for (auto collisionCandidateId: collisionCandidates)
+        {
+            // Don't add collision force for other non npc objects
+            if (mTickObjectData->at(collisionCandidateId).objectType != network::ObjectType::NPC)
+            {
+                continue;
+            }
+            // Don't add collision force for players that aren't this npc's primary target
+            else if (mTickObjectData->at(collisionCandidateId).objectType == network::ObjectType::PLAYER)
+            {
+                if (npcToTargetIter == mNPCToTargetEntries.end() || npcToTargetIter->second.mTargetObjectId != collisionCandidateId)
+                {
+                    continue;
+                }
+            }
+            
+            auto diff = objectData.position - mTickObjectData->at(collisionCandidateId).position;
+            diff.z = 0.0f;
+            
+            auto distance = glm::length(diff);
+            if (distance < mSeparationDistance)
+            {
+                auto normal = glm::normalize(diff);
+                auto tangent = glm::vec3(-normal.y, normal.x, 0.0f);
+                separation += normal * 0.5f + tangent * 0.5f;
+            }
+        }
+        
+        if (glm::dot(glm::normalize(objectData.velocity), glm::normalize(glm::normalize(vecToTarget + separation * mSeparationWeight) * step)) < 0.0f && glm::length(separation) > 0.0f)
+        {
+            separation = glm::vec3(0.0f);
+        }
+        
+        objectData.velocity = glm::normalize(vecToTarget + separation * mSeparationWeight) * step;
         objectData.position += objectData.velocity;
     }
     else
