@@ -221,11 +221,10 @@ void NetworkObjectUpdater::UpdateNPC(network::ObjectData& objectData, const floa
                 {
                     objectData.objectState = network::ObjectState::IDLE;
                     FindPathToTarget(objectData, mNPCToTargetEntries.at(objectData.objectId).mTargetObjectId, dtMillis, mapPosition, navmap);
-                    
                 }
                 else
                 {
-                    events::EventSystem::GetInstance().DispatchEvent<events::NPCAttackEvent>(objectData.objectId, network::AttackType::MELEE, network::ProjectileType::NONE);
+                    events::EventSystem::GetInstance().DispatchEvent<events::NPCAttackEvent>(objectData.objectId, mNPCToTargetEntries.at(objectData.objectId).mTargetObjectId, network::AttackType::MELEE, network::ProjectileType::NONE);
                     objectData.actionTimer += NPC_ATTACK_ANIMATION_TIMER_SECS;
                 }
             }
@@ -325,7 +324,7 @@ void NetworkObjectUpdater::UpdateNPCPath(network::ObjectData& objectData, const 
         if (objectData.actionTimer < 0.0f && mTickObjectData->count(npcToTargetIter->second.mTargetObjectId) && network::CollidersIntersect(mTickObjectData->at(npcToTargetIter->second.mTargetObjectId), objectData))
         {
             // This is now an attack animation timer
-            events::EventSystem::GetInstance().DispatchEvent<events::NPCAttackEvent>(objectData.objectId, network::AttackType::MELEE, network::ProjectileType::NONE);
+            events::EventSystem::GetInstance().DispatchEvent<events::NPCAttackEvent>(objectData.objectId, npcToTargetIter->second.mTargetObjectId, network::AttackType::MELEE, network::ProjectileType::NONE);
             objectData.actionTimer = NPC_ATTACK_ANIMATION_TIMER_SECS;
             objectData.objectState = network::ObjectState::MELEE_ATTACK;
             mPathController.ClearObjectPath(objectData.objectId);

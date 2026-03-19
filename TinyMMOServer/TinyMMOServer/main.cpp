@@ -127,11 +127,88 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
     
+    objectId_t nextId = 1;
     std::unordered_map<ENetPeer*, objectId_t> peerToPlayerId;
     std::unordered_map<objectId_t, ObjectData> objectDataMap;
     std::unordered_map<objectId_t, std::pair<ObjectData, float>> pendingObjectsToSpawn;
     std::unordered_map<objectId_t, float> tempObjectTTLSecs;
-    std::vector<objectId_t> tempObjectsToRemove;
+    std::unordered_map<objectId_t, std::unordered_set<objectId_t>> attackAffectedObjectIds;
+    
+    std::vector<objectId_t> tempObjectsToDestroy;
+    
+    auto SpawnRatLambda = [&](const objectId_t objectId)
+    {
+        ObjectData objectData = {};
+        objectData.objectId = objectId;
+        objectData.parentObjectId = objectId;
+        objectData.objectType = network::ObjectType::NPC;
+        objectData.attackType = network::AttackType::NONE;
+        objectData.projectileType = network::ProjectileType::NONE;
+        objectData.position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(math::RandomInt(25,30), math::RandomInt(25,30)), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
+        objectData.position.z = math::RandomFloat(0.4f, 0.5f);
+        objectData.velocity = glm::vec3(0.0f);
+        objectData.objectState = network::ObjectState::IDLE;
+        objectData.facingDirection = network::FacingDirection::SOUTH;
+        objectData.objectFaction = network::ObjectFaction::EVIL;
+        objectData.currentHealthPoints = objectData.maxHealthPoints = 100;
+        objectData.damagePoints = 0;
+        objectData.speed = PLAYER_BASE_SPEED;
+        objectData.actionTimer = 3.0f;
+        objectData.objectScale = 0.1f;
+
+        SetColliderData(objectData);
+        SetCurrentMap(objectData, STARTING_ZONE);
+        SetDisplayName(objectData, "Evil Rat");
+        
+        pendingObjectsToSpawn[objectId] = std::make_pair(std::move(objectData), 0.0f);
+    };
+    
+    auto ObjectDestructionCleanupLambda = [&](const objectId_t objectId)
+    {
+        events::EventSystem::GetInstance().DispatchEvent<events::ObjectDestroyedEvent>(objectId);
+        objectDataMap.erase(objectId);
+        tempObjectTTLSecs.erase(objectId);
+        
+        if (attackAffectedObjectIds.count(objectId))
+        {
+            attackAffectedObjectIds.erase(objectId);
+        }
+        else
+        {
+            for (auto& [attackId, affectedObjectIds]: attackAffectedObjectIds)
+            {
+                affectedObjectIds.erase(objectId);
+            }
+        }
+    };
+    
+    auto DamageApplicationLambda = [&](const objectId_t defenderId, const health_t damagePoints)
+    {
+        auto& defenderData = objectDataMap[defenderId];
+        
+        CharacterDamagedMessage charDamagedMessage = {};
+        charDamagedMessage.objectId = defenderId;
+        charDamagedMessage.damagePoints = damagePoints;
+        
+        defenderData.currentHealthPoints = math::Min(defenderData.maxHealthPoints, math::Max(0LL, defenderData.currentHealthPoints - charDamagedMessage.damagePoints));
+        charDamagedMessage.newHealthPoints = defenderData.currentHealthPoints;
+        
+        BroadcastMessage(server, &charDamagedMessage, sizeof(charDamagedMessage), channels::RELIABLE);
+        
+        if (defenderData.objectType == network::ObjectType::NPC && defenderData.currentHealthPoints <= 0)
+        {
+            if (std::find(tempObjectsToDestroy.begin(), tempObjectsToDestroy.end(), defenderId) == tempObjectsToDestroy.end())
+            {
+                tempObjectsToDestroy.push_back(defenderId);
+                
+                if (defenderData.objectFaction == network::ObjectFaction::EVIL)
+                {
+                    auto id = nextId++;
+                    SpawnRatLambda(id);
+                }
+            }
+        }
+    };
     
     // Register event listeners
     auto& eventSystem = events::EventSystem::GetInstance();
@@ -147,43 +224,21 @@ int main(int argc, char* argv[])
     std::unique_ptr<events::IListener> npcAttackEventListener = eventSystem.RegisterForEvent<events::NPCAttackEvent>([&](const events::NPCAttackEvent& event)
     {
         NPCAttackMessage npcAttackMessage = {};
-        npcAttackMessage.attackerId = event.mNPCObjectId;
+        npcAttackMessage.attackerId = event.mAttackerId;
         npcAttackMessage.attackType = event.mAttackType;
         npcAttackMessage.projectileType = event.mProjectileType;
         
         BroadcastMessage(server, &npcAttackMessage, sizeof(npcAttackMessage), channels::RELIABLE);
+        
+        DamageApplicationLambda(event.mDefenderId, 5);
     });
     
-    auto ObjectDestructionLambda = [&](objectId_t objectId)
+    for (int i = 1; i < 2; ++i)
     {
-        events::EventSystem::GetInstance().DispatchEvent<events::ObjectDestroyedEvent>(objectId);
-        objectDataMap.erase(objectId);
-        tempObjectTTLSecs.erase(objectId);
-    };
-    
-    for (int i = 1; i < 8; ++i)
-    {
-        objectDataMap[i] = {};
-        objectDataMap[i].objectId = i;
-        objectDataMap[i].parentObjectId = i;
-        objectDataMap[i].objectType = network::ObjectType::NPC;
-        objectDataMap[i].attackType = network::AttackType::NONE;
-        objectDataMap[i].projectileType = network::ProjectileType::NONE;
-        objectDataMap[i].position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(math::RandomInt(25,30), math::RandomInt(25,30)), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
-        objectDataMap[i].position.z = math::RandomFloat(0.4f, 0.5f);
-        objectDataMap[i].velocity = glm::vec3(0.0f);
-        objectDataMap[i].objectState = network::ObjectState::IDLE;
-        objectDataMap[i].facingDirection = network::FacingDirection::SOUTH;
-        objectDataMap[i].objectFaction = network::ObjectFaction::EVIL;
-        objectDataMap[i].speed = PLAYER_BASE_SPEED;
-        objectDataMap[i].actionTimer = 3.0f;
-        objectDataMap[i].objectScale = 0.1f;
-
-        SetColliderData(objectDataMap[i]);
-        SetCurrentMap(objectDataMap[i], STARTING_ZONE);
+        SpawnRatLambda(i);
     }
     
-    objectId_t nextId = objectDataMap.size() + 1;
+    nextId = pendingObjectsToSpawn.size() + 1;
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
@@ -214,11 +269,14 @@ int main(int argc, char* argv[])
                     objectDataMap[id].objectState = network::ObjectState::RUNNING;
                     objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
                     objectDataMap[id].objectFaction = network::ObjectFaction::GOOD;
+                    objectDataMap[id].currentHealthPoints = objectDataMap[id].maxHealthPoints = 100;
+                    objectDataMap[id].damagePoints = 0;
                     objectDataMap[id].speed = PLAYER_BASE_SPEED;
                     objectDataMap[id].objectScale = 0.1f;
 
                     SetColliderData(objectDataMap[id]);
                     SetCurrentMap(objectDataMap[id], STARTING_ZONE);
+                    SetDisplayName(objectDataMap[id], "Player");
                     
                     logging::Log(logging::LogType::INFO, "Player %d connected", id);
                     
@@ -350,6 +408,7 @@ int main(int argc, char* argv[])
                                 objectData.objectFaction = attackerData.objectFaction;
                                 objectData.objectScale = 0.125f;
                                 objectData.position = attackerData.position;
+                                objectData.damagePoints = 50;
                                 
                                 switch (attackerData.facingDirection)
                                 {
@@ -426,7 +485,7 @@ int main(int argc, char* argv[])
                     objectId_t id = peerToPlayerId[event.peer];
                     peerToPlayerId.erase(event.peer);
                     
-                    ObjectDestructionLambda(id);
+                    ObjectDestructionCleanupLambda(id);
 
                     logging::Log(logging::LogType::INFO, "Player %d disconnected.", id);
                     
@@ -466,7 +525,7 @@ int main(int argc, char* argv[])
                     ttl -= dtMillis / 1000.0f;
                     if (ttl <= 0.0f)
                     {
-                        tempObjectsToRemove.push_back(objectData.objectId);
+                        tempObjectsToDestroy.push_back(objectData.objectId);
                     }
                 }
                 
@@ -474,7 +533,45 @@ int main(int argc, char* argv[])
                 glm::vec3 colliderDimensions(objectData.colliderData.colliderRelativeDimensions.x * objectData.objectScale, objectData.colliderData.colliderRelativeDimensions.y * objectData.objectScale, 1.0f);
                 mapDataRepo.GetMapQuadtree(strutils::StringId(GetCurrentMapString(objectData))).InsertObject(objectId, objectData.position, colliderDimensions);
             }
-                 
+            
+            // Collision response
+            for (auto& [objectId, objectData] : objectDataMap)
+            {
+                if (objectData.objectType == network::ObjectType::ATTACK)
+                {
+                    auto collisionCandidates = mapDataRepo.GetMapQuadtree(strutils::StringId(GetCurrentMapString(objectData))).GetCollisionCandidates(objectData);
+                    for (auto candidateId: collisionCandidates)
+                    {
+                        // Ignore non player/npc collision candidates
+                        if (objectDataMap[candidateId].objectType != network::ObjectType::NPC && objectDataMap[candidateId].objectType != network::ObjectType::PLAYER)
+                        {
+                            continue;
+                        }
+                        
+                        // Ignore same faction candidates
+                        if (objectDataMap[candidateId].objectFaction == objectData.objectFaction)
+                        {
+                            continue;
+                        }
+                        
+                        // Ignore already affected candidates
+                        if (attackAffectedObjectIds[objectId].count(candidateId))
+                        {
+                            continue;
+                        }
+                                                
+                        // Ignore non colliding candidates
+                        if (!CollidersIntersect(objectData, objectDataMap[candidateId]))
+                        {
+                            continue;
+                        }
+                        
+                        attackAffectedObjectIds[objectId].insert(candidateId);
+                        DamageApplicationLambda(candidateId, objectData.damagePoints);
+                    }
+                }
+            }
+            
             // Update and move objects ready to spawn into main object data map
             for (auto iter = pendingObjectsToSpawn.begin(); iter != pendingObjectsToSpawn.end();)
             {
@@ -501,16 +598,16 @@ int main(int argc, char* argv[])
             }
             
             // Remove objects whose lifetime is over
-            for (auto objectIdToRemove: tempObjectsToRemove)
+            for (auto objectIdToRemove: tempObjectsToDestroy)
             {
                 ObjectDestroyedMessage objectDestroyedMessage{};
                 objectDestroyedMessage.objectId = objectIdToRemove;
                 
                 BroadcastMessage(server, &objectDestroyedMessage, sizeof(objectDestroyedMessage), channels::RELIABLE);
                 
-                ObjectDestructionLambda(objectIdToRemove);
+                ObjectDestructionCleanupLambda(objectIdToRemove);
             }
-            tempObjectsToRemove.clear();
+            tempObjectsToDestroy.clear();
             
             lastTick = now;
 
@@ -524,8 +621,6 @@ int main(int argc, char* argv[])
             }
         }
     }
-
-    enet_host_destroy(server);
 }
 
 ///------------------------------------------------------------------------------------------------

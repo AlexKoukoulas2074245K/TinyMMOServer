@@ -61,14 +61,16 @@ public:
 class NPCAttackEvent
 {
 public:
-    NPCAttackEvent(network::objectId_t npcObjectId, network::AttackType attackType, network::ProjectileType projectileType)
-        : mNPCObjectId(npcObjectId)
+    NPCAttackEvent(network::objectId_t attackerId, network::objectId_t defenderId, network::AttackType attackType, network::ProjectileType projectileType)
+        : mAttackerId(attackerId)
+        , mDefenderId(defenderId)
         , mAttackType(attackType)
         , mProjectileType(projectileType)
     {
     }
     
-    const network::objectId_t mNPCObjectId;
+    const network::objectId_t mAttackerId;
+    const network::objectId_t mDefenderId;
     const network::AttackType mAttackType;
     const network::ProjectileType mProjectileType;
 };
