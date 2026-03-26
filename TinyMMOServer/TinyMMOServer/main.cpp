@@ -11,6 +11,7 @@
 
 #include "MapDataRepository.h"
 #include "NetworkObjectUpdater.h"
+#include "NetworkObjectSpawner.h"
 
 #include "events/EventSystem.h"
 
@@ -39,56 +40,6 @@ static const std::string STARTING_ZONE = "forest_1";
 
 ///------------------------------------------------------------------------------------------------
 
-
-
-///------------------------------------------------------------------------------------------------
-
-// Assumes relevant object types have been set
-void SetColliderData(ObjectData& objectData)
-{
-    switch (objectData.objectType)
-    {
-        case network::ObjectType::PLAYER:
-        {
-            objectData.colliderData.colliderType = network::ColliderType::RECTANGLE;
-            objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.5f, 0.8f);
-        } break;
-        
-        case network::ObjectType::NPC:
-        {
-            objectData.colliderData.colliderType = network::ColliderType::RECTANGLE;
-            objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.5f, 0.5f);
-        } break;
-
-        case network::ObjectType::ATTACK:
-        {
-            switch (objectData.attackType)
-            {
-                case network::AttackType::PROJECTILE:
-                {
-                    objectData.colliderData.colliderType = network::ColliderType::CIRCLE;
-                    objectData.colliderData.colliderRelativeDimensions = glm::vec2(1.0f);
-                } break;
-
-                case network::AttackType::MELEE:
-                {
-                    objectData.colliderData.colliderType = network::ColliderType::CIRCLE;
-                    objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.8f, 0.8f);
-                } break;
-                    
-                case network::AttackType::NONE:
-                    break;
-            } break;
-        } break;
-            
-        case network::ObjectType::STATIC:
-            break;
-    }
-}
-
-
-///------------------------------------------------------------------------------------------------
-
 int main(int argc, char* argv[])
 {
     if (argc >= 2)
@@ -105,8 +56,9 @@ int main(int argc, char* argv[])
     MapDataRepository mapDataRepo;
     mapDataRepo.LoadMapData(argv[1]);
     
+    NetworkObjectSpawner netObjectSpawner;
     NetworkObjectUpdater netObjectUpdater(mapDataRepo);
-
+    
     enet_initialize();
     atexit(enet_deinitialize);
 
@@ -127,7 +79,6 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
     
-    objectId_t nextId = 1;
     std::unordered_map<ENetPeer*, objectId_t> peerToPlayerId;
     std::unordered_map<objectId_t, ObjectData> objectDataMap;
     std::unordered_map<objectId_t, std::pair<ObjectData, float>> pendingObjectsToSpawn;
@@ -136,31 +87,30 @@ int main(int argc, char* argv[])
     
     std::vector<objectId_t> tempObjectsToDestroy;
     
-    auto SpawnRatLambda = [&](const objectId_t objectId)
+    auto SpawnRatLambda = [&]()
     {
-        ObjectData objectData = {};
-        objectData.objectId = objectId;
-        objectData.parentObjectId = objectId;
-        objectData.objectType = network::ObjectType::NPC;
-        objectData.attackType = network::AttackType::NONE;
-        objectData.projectileType = network::ProjectileType::NONE;
-        objectData.position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(math::RandomInt(25,30), math::RandomInt(25,30)), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
-        objectData.position.z = math::RandomFloat(0.4f, 0.5f);
-        objectData.velocity = glm::vec3(0.0f);
-        objectData.objectState = network::ObjectState::IDLE;
-        objectData.facingDirection = network::FacingDirection::SOUTH;
-        objectData.objectFaction = network::ObjectFaction::EVIL;
-        objectData.currentHealthPoints = objectData.maxHealthPoints = 100;
-        objectData.damagePoints = 0;
-        objectData.speed = PLAYER_BASE_SPEED;
-        objectData.actionTimer = 3.0f;
-        objectData.objectScale = 0.1f;
-
-        SetColliderData(objectData);
-        SetCurrentMap(objectData, STARTING_ZONE);
-        SetDisplayName(objectData, "Evil Rat");
+        auto position = mapDataRepo.GetNavmaps().at(strutils::StringId(STARTING_ZONE)).GetMapPositionFromNavmapCoord(glm::ivec2(math::RandomInt(25,30), math::RandomInt(25,30)), mapDataRepo.GetMapMetaData().at(strutils::StringId(STARTING_ZONE)).mMapPosition, MAP_GAME_SCALE, 0.5f);
+        position.z = math::RandomFloat(0.4f, 0.5f);
         
-        pendingObjectsToSpawn[objectId] = std::make_pair(std::move(objectData), 0.0f);
+        auto objectData = netObjectSpawner.NewObject()
+            .SetObjectType(network::ObjectType::NPC)
+            .SetPosition(position)
+            .SetObjectState(network::ObjectState::IDLE)
+            .SetFacingDirection(network::FacingDirection::SOUTH)
+            .SetObjectFaction(network::ObjectFaction::EVIL)
+            .SetCurrentHealthPoints(100)
+            .SetMaxHealthPoints(100)
+            .SetDamagePoints(5)
+            .SetSpeed(PLAYER_BASE_SPEED)
+            .SetActionTimer(3.0f)
+            .SetObjectScale(0.1f)
+            .SetColliderType(network::ColliderType::RECTANGLE)
+            .SetColliderRelativeDimensions(glm::vec2(0.5f, 0.5f))
+            .SetCurrentMap(STARTING_ZONE)
+            .SetDisplayName("Evil Rat")
+        .GetObjectData();
+        
+        pendingObjectsToSpawn[objectData.objectId] = std::make_pair(std::move(objectData), 0.0f);
     };
     
     auto ObjectDestructionCleanupLambda = [&](const objectId_t objectId)
@@ -195,16 +145,15 @@ int main(int argc, char* argv[])
         
         BroadcastMessage(server, &charDamagedMessage, sizeof(charDamagedMessage), channels::RELIABLE);
         
-        if (defenderData.objectType == network::ObjectType::NPC && defenderData.currentHealthPoints <= 0)
+        if (defenderData.objectType == ObjectType::NPC && defenderData.currentHealthPoints <= 0)
         {
             if (std::find(tempObjectsToDestroy.begin(), tempObjectsToDestroy.end(), defenderId) == tempObjectsToDestroy.end())
             {
                 tempObjectsToDestroy.push_back(defenderId);
                 
-                if (defenderData.objectFaction == network::ObjectFaction::EVIL)
+                if (defenderData.objectFaction == ObjectFaction::EVIL)
                 {
-                    auto id = nextId++;
-                    SpawnRatLambda(id);
+                    SpawnRatLambda();
                 }
             }
         }
@@ -230,15 +179,14 @@ int main(int argc, char* argv[])
         
         BroadcastMessage(server, &npcAttackMessage, sizeof(npcAttackMessage), channels::RELIABLE);
         
-        DamageApplicationLambda(event.mDefenderId, 5);
+        DamageApplicationLambda(event.mDefenderId, objectDataMap[event.mAttackerId].damagePoints);
     });
     
+    // Spawn them test rats
     for (int i = 1; i < 2; ++i)
     {
-        SpawnRatLambda(i);
+        SpawnRatLambda();
     }
-    
-    nextId = pendingObjectsToSpawn.size() + 1;
     
     logging::Log(logging::LogType::INFO, "Server running on port 7777");
 
@@ -255,38 +203,34 @@ int main(int argc, char* argv[])
             {
                 case ENET_EVENT_TYPE_CONNECT:
                 {
-                    const auto id = nextId++;
-                    peerToPlayerId[event.peer] = id;
+                    auto objectData = netObjectSpawner.NewObject()
+                        .SetObjectType(network::ObjectType::PLAYER)
+                        .SetPosition(glm::vec3(-1.0f, -1.0f, math::RandomFloat(0.11f, 0.5f)))
+                        .SetObjectState(network::ObjectState::RUNNING)
+                        .SetFacingDirection(network::FacingDirection::SOUTH)
+                        .SetObjectFaction(network::ObjectFaction::GOOD)
+                        .SetCurrentHealthPoints(100)
+                        .SetMaxHealthPoints(100)
+                        .SetDamagePoints(0)
+                        .SetSpeed(PLAYER_BASE_SPEED)
+                        .SetObjectScale(0.1f)
+                        .SetColliderType(network::ColliderType::RECTANGLE)
+                        .SetColliderRelativeDimensions(glm::vec2(0.5f, 0.8f))
+                        .SetCurrentMap(STARTING_ZONE)
+                        .SetDisplayName("Player")
+                    .GetObjectData();
                     
-                    objectDataMap[id] = {};
-                    objectDataMap[id].objectId = id;
-                    objectDataMap[id].parentObjectId = id;
-                    objectDataMap[id].objectType = network::ObjectType::PLAYER;
-                    objectDataMap[id].attackType = network::AttackType::NONE;
-                    objectDataMap[id].projectileType = network::ProjectileType::NONE;
-                    objectDataMap[id].position =  glm::vec3(-1.0f, -1.0f, math::RandomFloat(0.11f, 0.5f));
-                    objectDataMap[id].velocity = glm::vec3(0.0f);
-                    objectDataMap[id].objectState = network::ObjectState::RUNNING;
-                    objectDataMap[id].facingDirection = network::FacingDirection::SOUTH;
-                    objectDataMap[id].objectFaction = network::ObjectFaction::GOOD;
-                    objectDataMap[id].currentHealthPoints = objectDataMap[id].maxHealthPoints = 100;
-                    objectDataMap[id].damagePoints = 0;
-                    objectDataMap[id].speed = PLAYER_BASE_SPEED;
-                    objectDataMap[id].objectScale = 0.1f;
-
-                    SetColliderData(objectDataMap[id]);
-                    SetCurrentMap(objectDataMap[id], STARTING_ZONE);
-                    SetDisplayName(objectDataMap[id], "Player");
-                    
-                    logging::Log(logging::LogType::INFO, "Player %d connected", id);
+                    peerToPlayerId[event.peer] = objectData.objectId;
+                    logging::Log(logging::LogType::INFO, "Player %d connected", objectData.objectId);
                     
                     PlayerConnectedMessage playerConnectedMessage = {};
-                    playerConnectedMessage.objectId = id;
+                    playerConnectedMessage.objectId = objectData.objectId;
                     
                     SendMessage(event.peer, &playerConnectedMessage, sizeof(playerConnectedMessage), channels::RELIABLE);
                     
+                    objectDataMap.insert(std::make_pair(objectData.objectId, objectData));
                     ObjectCreatedMessage objectCreatedMessage = {};
-                    objectCreatedMessage.objectData = objectDataMap[id];
+                    objectCreatedMessage.objectData = objectDataMap[objectData.objectId];
                     
                     BroadcastMessage(server, &objectCreatedMessage, sizeof(objectCreatedMessage), channels::RELIABLE);
 
@@ -391,80 +335,80 @@ int main(int argc, char* argv[])
                             responseMessage.chargeDurationSecs = 0.0f;
                             responseMessage.projectileType = msg->projectileType;
                             
-                            if (msg->attackType == network::AttackType::MELEE)
+                            if (msg->attackType == AttackType::MELEE)
                             {
                                 responseMessage.allowed = true;
                                 responseMessage.chargeDurationSecs = FAST_MELEE_CHARGE_TIME_SECS;
                                 
-                                const auto id = nextId++;
-                                ObjectData objectData = {};
-                                objectData.objectId = id;
-                                objectData.parentObjectId = attackerData.objectId;
-                                objectData.objectType = network::ObjectType::ATTACK;
-                                objectData.attackType = msg->attackType;
-                                objectData.projectileType = msg->projectileType;
-                                objectData.objectState = network::ObjectState::IDLE;
-                                objectData.facingDirection = attackerData.facingDirection;
-                                objectData.objectFaction = attackerData.objectFaction;
-                                objectData.objectScale = 0.125f;
-                                objectData.position = attackerData.position;
-                                objectData.damagePoints = 50;
+                                auto objectData = netObjectSpawner.NewObject()
+                                    .SetParentObjectId(attackerData.objectId)
+                                    .SetObjectType(network::ObjectType::ATTACK)
+                                    .SetAttackType(msg->attackType)
+                                    .SetProjectileType(msg->projectileType)
+                                    .SetObjectState(network::ObjectState::IDLE)
+                                    .SetFacingDirection(attackerData.facingDirection)
+                                    .SetObjectFaction(attackerData.objectFaction)
+                                    .SetObjectScale(0.125f)
+                                    .SetPosition(attackerData.position)
+                                    .SetDamagePoints(50)
+                                .GetObjectData();
                                 
                                 switch (attackerData.facingDirection)
                                 {
-                                    case network::FacingDirection::SOUTH:
+                                    case FacingDirection::SOUTH:
                                     {
-                                        objectData.position.y -= network::MAP_TILE_SIZE * 0.8f;
+                                        objectData.position.y -= MAP_TILE_SIZE * 0.8f;
                                     } break;
                                         
-                                    case network::FacingDirection::NORTH:
+                                    case FacingDirection::NORTH:
                                     {
-                                        objectData.position.y += network::MAP_TILE_SIZE * 0.8f;
+                                        objectData.position.y += MAP_TILE_SIZE * 0.8f;
                                     } break;
                                         
-                                    case network::FacingDirection::WEST:
+                                    case FacingDirection::WEST:
                                     {
-                                        objectData.position.x -= network::MAP_TILE_SIZE * 0.5f;
+                                        objectData.position.x -= MAP_TILE_SIZE * 0.5f;
                                     } break;
                                         
-                                    case network::FacingDirection::EAST:
+                                    case FacingDirection::EAST:
                                     {
-                                        objectData.position.x += network::MAP_TILE_SIZE * 0.5f;
+                                        objectData.position.x += MAP_TILE_SIZE * 0.5f;
                                     } break;
                                         
-                                    case network::FacingDirection::NORTH_WEST:
+                                    case FacingDirection::NORTH_WEST:
                                     {
-                                        objectData.position.x -= network::MAP_TILE_SIZE * 0.3f;
-                                        objectData.position.y += network::MAP_TILE_SIZE * 0.6f;
+                                        objectData.position.x -= MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y += MAP_TILE_SIZE * 0.6f;
                                     } break;
                                         
-                                    case network::FacingDirection::NORTH_EAST:
+                                    case FacingDirection::NORTH_EAST:
                                     {
-                                        objectData.position.x += network::MAP_TILE_SIZE * 0.3f;
-                                        objectData.position.y += network::MAP_TILE_SIZE * 0.6f;
+                                        objectData.position.x += MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y += MAP_TILE_SIZE * 0.6f;
                                     } break;
                                         
-                                    case network::FacingDirection::SOUTH_WEST:
+                                    case FacingDirection::SOUTH_WEST:
                                     {
-                                        objectData.position.x -= network::MAP_TILE_SIZE * 0.3f;
-                                        objectData.position.y -= network::MAP_TILE_SIZE * 0.6f;
+                                        objectData.position.x -= MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y -= MAP_TILE_SIZE * 0.6f;
                                     } break;
                                         
-                                    case network::FacingDirection::SOUTH_EAST:
+                                    case FacingDirection::SOUTH_EAST:
                                     {
-                                        objectData.position.x += network::MAP_TILE_SIZE * 0.3f;
-                                        objectData.position.y -= network::MAP_TILE_SIZE * 0.6f;
+                                        objectData.position.x += MAP_TILE_SIZE * 0.3f;
+                                        objectData.position.y -= MAP_TILE_SIZE * 0.6f;
                                     } break;
                                 }
                                 
-                                SetColliderData(objectData);
+                                objectData.colliderData.colliderType = ColliderType::CIRCLE;
+                                objectData.colliderData.colliderRelativeDimensions = glm::vec2(0.8f, 0.8f);
                                 SetCurrentMap(objectData, GetCurrentMapString(attackerData));
                                 
-                                pendingObjectsToSpawn[id] = std::make_pair(objectData, responseMessage.chargeDurationSecs);
+                                pendingObjectsToSpawn[objectData.objectId] = std::make_pair(objectData, responseMessage.chargeDurationSecs);
                                 
                                 // Pre-emptively add it to the tempObjects. The timer won't start going down
                                 // until it is properly added to the main objectData container.
-                                tempObjectTTLSecs[id] = FAST_MELEE_SLASH_TIME_SECS;
+                                tempObjectTTLSecs[objectData.objectId] = FAST_MELEE_SLASH_TIME_SECS;
                             }
 
                             SendMessage(event.peer, &responseMessage, sizeof(responseMessage), channels::RELIABLE);
@@ -537,13 +481,13 @@ int main(int argc, char* argv[])
             // Collision response
             for (auto& [objectId, objectData] : objectDataMap)
             {
-                if (objectData.objectType == network::ObjectType::ATTACK)
+                if (objectData.objectType == ObjectType::ATTACK)
                 {
                     auto collisionCandidates = mapDataRepo.GetMapQuadtree(strutils::StringId(GetCurrentMapString(objectData))).GetCollisionCandidates(objectData);
                     for (auto candidateId: collisionCandidates)
                     {
                         // Ignore non player/npc collision candidates
-                        if (objectDataMap[candidateId].objectType != network::ObjectType::NPC && objectDataMap[candidateId].objectType != network::ObjectType::PLAYER)
+                        if (objectDataMap[candidateId].objectType != ObjectType::NPC && objectDataMap[candidateId].objectType != ObjectType::PLAYER)
                         {
                             continue;
                         }

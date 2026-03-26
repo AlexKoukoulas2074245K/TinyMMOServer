@@ -24,45 +24,55 @@
 
 class MapDataRepository;
 struct MapMetaData;
+
+namespace network
+{
+
+///------------------------------------------------------------------------------------------------
+
 class NetworkObjectUpdater final: public events::IListener
 {
 public:
     NetworkObjectUpdater(MapDataRepository& mapDataRepository);
     
-    bool DoesObjectHavePath(const network::objectId_t objectId) const;
-    std::queue<glm::vec3>& GetPath(const network::objectId_t objectId);
-    const std::queue<glm::vec3>& GetPath(const network::objectId_t objectId) const;
+    bool DoesObjectHavePath(const objectId_t objectId) const;
+    std::queue<glm::vec3>& GetPath(const objectId_t objectId);
+    const std::queue<glm::vec3>& GetPath(const objectId_t objectId) const;
     
     void OnObjectDestroyedEvent(const events::ObjectDestroyedEvent& objectDestroyedEvent);
-    void PerformPreUpdateSetup(const std::unordered_map<network::objectId_t, network::ObjectData>& objectData);
-    void UpdateNetworkObject(network::ObjectData& objectData, const float dtMillis);
+    void PerformPreUpdateSetup(const std::unordered_map<objectId_t, ObjectData>& objectData);
+    void UpdateNetworkObject(ObjectData& objectData, const float dtMillis);
     void SetSwarmParams(const float separationDistance, const float separationWeight);
-
+    
 private:
-    void UpdateAttack(network::ObjectData& objectData, const float dtMillis);
-    void UpdateNPC(network::ObjectData& objectData, const float dtMillis);
-    void FindPathToTarget(const network::ObjectData& objectData, const network::objectId_t targetId, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap);
-    void UpdateNPCPath(network::ObjectData& objectData, const float dtMillis, const glm::vec2& mapPosition, const network::Navmap& navmap, const strutils::StringId& currentMap);
-    network::objectId_t FindValidTarget(network::ObjectData& objectData, const float dtMillis, const strutils::StringId& currentMap, const glm::vec2& mapPosition, const network::Navmap& navmap);
-    bool CheckForMapChange(network::ObjectData& objectData, const MapMetaData& currentMapMetaData);
-
+    void UpdateAttack(ObjectData& objectData, const float dtMillis);
+    void UpdateNPC(ObjectData& objectData, const float dtMillis);
+    void FindPathToTarget(const ObjectData& objectData, const objectId_t targetId, const float dtMillis, const glm::vec2& mapPosition, const Navmap& navmap);
+    void UpdateNPCPath(ObjectData& objectData, const float dtMillis, const glm::vec2& mapPosition, const Navmap& navmap, const strutils::StringId& currentMap);
+    objectId_t FindValidTarget(ObjectData& objectData, const float dtMillis, const strutils::StringId& currentMap, const glm::vec2& mapPosition, const Navmap& navmap);
+    bool CheckForMapChange(ObjectData& objectData, const MapMetaData& currentMapMetaData);
+    
 private:
     struct NpcTargetEntry
     {
-        network::objectId_t mTargetObjectId;
+        objectId_t mTargetObjectId;
         float mPathRecalculationTimer;
     };
-
+    
 private:
     MapDataRepository& mMapDataRepository;
     PathController mPathController;
     
-    std::unordered_map<strutils::StringId, std::vector<network::objectId_t>, strutils::StringIdHasher> mObjectIdsPerMap;
-    std::unordered_map<network::objectId_t, NpcTargetEntry> mNPCToTargetEntries;
-    const std::unordered_map<network::objectId_t, network::ObjectData>*  mTickObjectData;
+    std::unordered_map<strutils::StringId, std::vector<objectId_t>, strutils::StringIdHasher> mObjectIdsPerMap;
+    std::unordered_map<objectId_t, NpcTargetEntry> mNPCToTargetEntries;
+    const std::unordered_map<objectId_t, ObjectData>*  mTickObjectData;
     float mSeparationDistance;
     float mSeparationWeight;
 };
+
+///------------------------------------------------------------------------------------------------
+
+}
 
 ///------------------------------------------------------------------------------------------------
 
